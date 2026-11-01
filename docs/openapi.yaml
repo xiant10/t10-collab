@@ -1,0 +1,727 @@
+openapi: 3.1.0
+info:
+  title: t10-collab
+  version: 0.2.0
+  description: >
+    Work items, offers and notifications. Every route needs a person's bearer
+    token, and the tenant comes from its tid. A forbidden item answers 404, the
+    same as a missing one. Lists take limit (1 to 200, default 50) and cursor,
+    and return next_cursor, which is empty on the last page.
+security:
+  - bearer: []
+paths:
+  /v1/module:
+    get:
+      summary: This module's manifest
+      description: Routes and fields can only be added within an api_version.
+      operationId: getManifest
+      responses:
+        "200":
+          description: The manifest
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  api_version: {type: integer}
+                  action_prefix: {type: string}
+                  enabled: {type: boolean}
+                  features: {type: array, items: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+  /internal/v1/attention:
+    get:
+      summary: What needs one person, as counts
+      description: Only t10-notify's service token can call this. It is never exposed publicly.
+      operationId: getAttention
+      parameters:
+        - {name: tenant, in: query, required: true, schema: {type: string}}
+        - {name: user, in: query, required: true, schema: {type: string}}
+        - {name: since, in: query, description: "Start for new assignments and declines. Defaults to 24 hours ago.", schema: {type: string, format: date-time}}
+      responses:
+        "200":
+          description: Counts, with no titles or names
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  offers_to_answer: {type: integer}
+                  new_assignments: {type: integer}
+                  due_soon: {type: integer}
+                  overdue: {type: integer}
+                  declined: {type: integer}
+                  waiting_offers: {type: integer}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items:
+    post:
+      summary: Create an item, optionally sending it at once
+      operationId: createWorkItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NewItem"}
+      responses:
+        "201": {$ref: "#/components/responses/Item"}
+        default: {$ref: "#/components/responses/Error"}
+    get:
+      summary: List the items the caller can see
+      operationId: listWorkItems
+      parameters:
+        - {name: view, in: query, schema: {type: string, enum: [owned, sent, collaborating, list, reports]}, description: "reports is empty unless the tenant's manager_visibility allows it"}
+        - {name: list, in: query, schema: {type: string}, description: Required with view=list}
+        - {name: status, in: query, schema: {$ref: "#/components/schemas/Status"}}
+        - {$ref: "#/components/parameters/limit"}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/Item"}}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    get:
+      summary: Read one item
+      operationId: getWorkItem
+      responses:
+        "200": {$ref: "#/components/responses/Item"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      summary: Edit fields or status
+      description: Needs the version the caller read. Fields left out stay as they are, and due_at takes null.
+      operationId: updateWorkItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: {type: integer}
+                title: {type: string, maxLength: 300}
+                description: {type: string, maxLength: 20000}
+                priority: {$ref: "#/components/schemas/Priority"}
+                status: {$ref: "#/components/schemas/Status"}
+                due_at: {type: [string, "null"], format: date-time}
+      responses:
+        "200": {$ref: "#/components/responses/Item"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Soft delete, for any owner
+      operationId: deleteWorkItem
+      responses:
+        "204": {description: Deleted}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/events:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    get:
+      summary: Item history, oldest first
+      operationId: listItemEvents
+      parameters:
+        - {$ref: "#/components/parameters/limit"}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: {type: array, items: {$ref: "#/components/schemas/Event"}}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/claim:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Claim an unowned list item
+      operationId: claimWorkItem
+      responses:
+        "200": {$ref: "#/components/responses/Item"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/owners/me:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    delete:
+      summary: Stop being an owner
+      operationId: stopOwning
+      responses:
+        "204": {description: No longer an owner}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/collaborators/{user}:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+      - {name: user, in: path, required: true, schema: {type: string}}
+    put:
+      summary: Add a collaborator
+      operationId: addCollaborator
+      responses:
+        "204": {description: Added}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Remove a collaborator
+      operationId: removeCollaborator
+      responses:
+        "204": {description: Removed}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/comments:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    get:
+      summary: Read comments, oldest first
+      operationId: listComments
+      parameters:
+        - {$ref: "#/components/parameters/limit"}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  comments: {type: array, items: {$ref: "#/components/schemas/Comment"}}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      summary: Add a comment
+      operationId: addComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: {type: string, maxLength: 10000}
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Comment"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/send:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Send an item
+      description: The result's state is pending for an offer, or assigned when the recipient is beneath the sender. The service decides, not the client.
+      operationId: sendWorkItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Send"}
+      responses:
+        "201": {$ref: "#/components/responses/Offer"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/offers:
+    get:
+      summary: Pending offers to the caller, or everything they sent
+      operationId: listOffers
+      parameters:
+        - {name: box, in: query, required: true, schema: {type: string, enum: [inbox, sent]}}
+        - {$ref: "#/components/parameters/limit"}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  offers: {type: array, items: {$ref: "#/components/schemas/Offer"}}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/offers/{id}/accept:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Accept, for the recipient
+      operationId: acceptOffer
+      responses:
+        "200": {$ref: "#/components/responses/Offer"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/offers/{id}/decline:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Decline, for the recipient
+      operationId: declineOffer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: {type: string, maxLength: 2000}
+      responses:
+        "200": {$ref: "#/components/responses/Offer"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/offers/{id}/withdraw:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Withdraw, for the sender or any owner
+      operationId: withdrawOffer
+      responses:
+        "200": {$ref: "#/components/responses/Offer"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/lists:
+    get:
+      summary: The lists the caller is on
+      operationId: listLists
+      parameters:
+        - {name: archived, in: query, schema: {type: boolean, default: false}}
+        - {$ref: "#/components/parameters/limit"}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lists: {type: array, items: {$ref: "#/components/schemas/List"}}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+    post:
+      summary: Create a list owned by the caller
+      operationId: createList
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, maxLength: 200}
+      responses:
+        "201": {$ref: "#/components/responses/List"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/lists/{id}:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    get:
+      summary: Read a list and its members
+      operationId: getList
+      responses:
+        "200": {$ref: "#/components/responses/List"}
+        default: {$ref: "#/components/responses/Error"}
+    patch:
+      summary: Rename, archive, or set or clear a unit link
+      operationId: updateList
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: {type: string, maxLength: 200}
+                archived: {type: boolean}
+                org_unit_id: {type: string, description: Empty clears the link}
+      responses:
+        "200": {$ref: "#/components/responses/List"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/lists/{id}/members/{user}:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+      - {name: user, in: path, required: true, schema: {type: string}}
+    put:
+      summary: Add a member or change their role, which also makes them manual
+      operationId: putListMember
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: {type: string, enum: [owner, member], default: member}
+      responses:
+        "204": {description: Saved}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Remove a member. An org member answers managed_by_unit
+      operationId: removeListMember
+      responses:
+        "204": {description: Removed}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/people:
+    get:
+      summary: Find an active teammate by display name
+      operationId: findPeople
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: unit, in: query, schema: {type: string}}
+        - {$ref: "#/components/parameters/limit"}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  people:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        user_id: {type: string}
+                        display_name: {type: string, description: Unverified. Can be empty}
+                        org_unit_id: {type: string}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/units:
+    get:
+      summary: The tenant's org units
+      operationId: listUnits
+      responses:
+        "200":
+          description: The units
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  units:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: string}
+                        parent_id: {type: string}
+                        name: {type: string}
+                        kind: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/notifications:
+    get:
+      summary: Notifications after a cursor, oldest first
+      description: Poll about every 30 seconds with the cursor from the last response.
+      operationId: listNotifications
+      parameters:
+        - {name: after, in: query, schema: {type: string}}
+        - {$ref: "#/components/parameters/limit"}
+      responses:
+        "200":
+          description: New notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: string}
+                        read_at: {type: [string, "null"], format: date-time}
+                        event: {$ref: "#/components/schemas/Event"}
+                        target: {type: string, description: "The record this is about, as <module>:<type>:<id>"}
+                  cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/notifications/read:
+    post:
+      summary: Mark the caller's notifications as read
+      operationId: markNotificationsRead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: {type: array, items: {type: string}}
+      responses:
+        "204": {description: Marked}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/settings:
+    get:
+      summary: Read tenant settings, for any member
+      operationId: getSettings
+      responses:
+        "200": {$ref: "#/components/responses/Settings"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/admin/settings:
+    put:
+      summary: Change tenant settings, for a tenant admin
+      operationId: putSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Settings"}
+      responses:
+        "200": {$ref: "#/components/responses/Settings"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/admin/departures:
+    get:
+      summary: Items nobody can act on, oldest first, for a tenant admin
+      description: Titles and owners only. Closed items stay out, and come back if someone reopens them.
+      operationId: listItemQueue
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {$ref: "#/components/parameters/limit"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/QueuedItem"}}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/admin/departures/{item}/reassign:
+    post:
+      summary: Give a queued item a new owner, for a tenant admin
+      description: Needs no acceptance. Replaces every owner, and a suspended owner stays on as a collaborator. Anything not in the queue answers 404.
+      operationId: reassignItem
+      parameters:
+        - {name: item, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NewOwner"}
+      responses:
+        "200":
+          description: Reassigned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  title: {type: string}
+                  owners: {type: array, items: {type: string}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/admin/departures/lists:
+    get:
+      summary: Lists nobody can manage, oldest first, for a tenant admin
+      operationId: listListQueue
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {$ref: "#/components/parameters/limit"}
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lists: {type: array, items: {$ref: "#/components/schemas/QueuedList"}}
+                  next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/admin/departures/lists/{id}/owner:
+    post:
+      summary: Give a queued list a new owner, for a tenant admin
+      description: Anything not in the queue answers 404.
+      operationId: setListOwner
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NewOwner"}
+      responses:
+        "204": {description: Done}
+        default: {$ref: "#/components/responses/Error"}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+  parameters:
+    id: {name: id, in: path, required: true, schema: {type: string}}
+    limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+    cursor: {name: cursor, in: query, schema: {type: string}}
+  responses:
+    Item:
+      description: The item
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Item"}
+    List:
+      description: The list
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/List"}
+    Settings:
+      description: The settings
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Settings"}
+    Offer:
+      description: The offer
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Offer"}
+    Error:
+      description: An error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: {$ref: "#/components/schemas/ErrorCode"}
+              message: {type: string}
+  schemas:
+    Status: {type: string, enum: [todo, doing, done, cancelled]}
+    Priority: {type: string, enum: [low, normal, high]}
+    NewItem:
+      type: object
+      required: [title]
+      properties:
+        title: {type: string, maxLength: 300}
+        description: {type: string, maxLength: 20000}
+        priority: {$ref: "#/components/schemas/Priority"}
+        due_at: {type: string, format: date-time}
+        client_ref: {type: string, description: A retry with the same value returns the first item}
+        send: {$ref: "#/components/schemas/Send"}
+        list_id: {type: string, description: Puts the item on a list the caller is on}
+        unowned: {type: boolean, description: Starts a list item with no owner}
+    List:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        org_unit_id: {type: string}
+        created_at: {type: string, format: date-time}
+        archived_at: {type: [string, "null"], format: date-time}
+        members:
+          type: array
+          description: Filled on a single read
+          items:
+            type: object
+            properties:
+              user_id: {type: string}
+              role: {type: string, enum: [owner, member]}
+              source: {type: string, enum: [manual, org]}
+    Settings:
+      type: object
+      required: [manager_visibility]
+      properties:
+        manager_visibility: {type: string, enum: [none, direct_reports, all_reports]}
+    NewOwner:
+      type: object
+      required: [to]
+      properties:
+        to: {type: string, description: An active member of the tenant}
+    QueuedItem:
+      type: object
+      properties:
+        id: {type: string}
+        title: {type: string}
+        status: {$ref: "#/components/schemas/Status"}
+        owners: {type: array, items: {type: string}}
+        reason: {type: string, enum: [no_successor, owner_suspended]}
+        queued_at: {type: string, format: date-time}
+    QueuedList:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        reason: {type: string, enum: [no_active_owner, no_active_members]}
+        queued_at: {type: string, format: date-time}
+    Send:
+      type: object
+      required: [to]
+      properties:
+        to: {type: string}
+        mode: {type: string, enum: [transfer, share], default: transfer}
+        note: {type: string, maxLength: 2000}
+        client_ref: {type: string, description: A retry with the same value returns the first send}
+    Item:
+      type: object
+      properties:
+        id: {type: string}
+        title: {type: string}
+        description: {type: string}
+        status: {$ref: "#/components/schemas/Status"}
+        priority: {$ref: "#/components/schemas/Priority"}
+        due_at: {type: [string, "null"], format: date-time}
+        creator_id: {type: string}
+        list_id: {type: string}
+        version: {type: integer}
+        owners: {type: array, items: {type: string}}
+        collaborators: {type: array, items: {type: string}}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    Offer:
+      type: object
+      properties:
+        id: {type: string}
+        item_id: {type: string}
+        item_title: {type: string, description: Empty once the caller can't see the item}
+        from_user_id: {type: string, description: "system:sweep when a departed owner's item is being offered on"}
+        to_user_id: {type: string}
+        mode: {type: string, enum: [transfer, share]}
+        note: {type: string}
+        state: {type: string, enum: [pending, assigned, accepted, declined, withdrawn, voided, expired]}
+        expires_at: {type: [string, "null"], format: date-time, description: Set only on an offer holding a departed owner's item}
+        response_note: {type: string}
+        responded_at: {type: [string, "null"], format: date-time}
+        created_at: {type: string, format: date-time}
+    Comment:
+      type: object
+      properties:
+        id: {type: string}
+        author_id: {type: string}
+        body: {type: string}
+        created_at: {type: string, format: date-time}
+    Event:
+      type: object
+      properties:
+        id: {type: string}
+        item_id: {type: string}
+        actor_user_id: {type: string}
+        kind: {type: string}
+        detail: {type: object}
+        at: {type: string, format: date-time}
+    ErrorCode:
+      type: string
+      enum:
+        - already_owned
+        - already_owner
+        - client_ref_reused
+        - forbidden
+        - internal_error
+        - invalid_recipient
+        - invalid_request
+        - invalid_token
+        - item_closed
+        - invalid_unit
+        - last_list_owner
+        - last_owner
+        - list_archived
+        - managed_by_unit
+        - not_found
+        - offer_exists
+        - offer_not_pending
+        - org_unavailable
+        - rate_limited
+        - version_conflict

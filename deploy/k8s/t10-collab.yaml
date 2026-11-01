@@ -1,0 +1,62 @@
+# Two stateless replicas in the t10 namespace. Migrations take an advisory lock,
+# so both can start at once. The secret holds DATABASE_URL and AUTH_CLIENT_SECRET.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: t10-collab
+  namespace: t10
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: t10-collab
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: t10-collab
+        # Lets these pods through auth-server's network policy.
+        t10.dev/auth-client: "true"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: t10-collab
+          image: t10-collab:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+          env:
+            - name: AUTH_ISSUER
+              value: https://auth.example.com
+            - name: AUTH_URL
+              value: http://auth-server.t10.svc.cluster.local:8081
+          envFrom:
+            - secretRef:
+                name: t10-collab
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8082
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8082
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: t10-collab
+  namespace: t10
+spec:
+  selector:
+    app.kubernetes.io/name: t10-collab
+  ports:
+    - port: 8082
