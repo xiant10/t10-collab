@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Actions a route declares. A person's rights are judged record by record below;
-// phase 5 will also require these on every grant of a delegated token.
+// Actions a route or agent tool declares. A person's rights are judged record by
+// record below, and an agent also needs the action on every grant of its token.
 const (
 	ActionRead   = "work:read"
 	ActionWrite  = "work:write"
@@ -36,6 +36,8 @@ const System = "system:sweep"
 type Caller struct {
 	TenantID string
 	UserID   string
+	// GrantID is set when an agent is acting for the person, and goes on the record.
+	GrantID string
 }
 
 // Relation is everything about a caller that access to one item depends on.

@@ -38,8 +38,8 @@ func Record(ctx context.Context, tx pgx.Tx, c policy.Caller, ch Change) error {
 	}
 	eventID := ids.New("evt")
 	_, err = tx.Exec(ctx,
-		"INSERT INTO collab.events (tenant_id, id, item_id, actor_user_id, kind, detail) VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6)",
-		c.TenantID, eventID, ch.ItemID, c.UserID, ch.Kind, detail)
+		"INSERT INTO collab.events (tenant_id, id, item_id, actor_user_id, actor_grant_id, kind, detail) VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7)",
+		c.TenantID, eventID, ch.ItemID, c.UserID, c.GrantID, ch.Kind, detail)
 	if err != nil {
 		return fmt.Errorf("write event: %w", err)
 	}
@@ -86,12 +86,14 @@ func PeopleOn(ctx context.Context, tx pgx.Tx, tenantID, itemID string) ([]string
 
 // Event is one line of an item's history.
 type Event struct {
-	ID          string         `json:"id"`
-	ItemID      string         `json:"item_id,omitempty"`
-	ActorUserID string         `json:"actor_user_id"`
-	Kind        string         `json:"kind"`
-	Detail      map[string]any `json:"detail"`
-	At          time.Time      `json:"at"`
+	ID          string `json:"id"`
+	ItemID      string `json:"item_id,omitempty"`
+	ActorUserID string `json:"actor_user_id"`
+	// ActorGrantID is set when an agent acted for the person.
+	ActorGrantID string         `json:"actor_grant_id,omitempty"`
+	Kind         string         `json:"kind"`
+	Detail       map[string]any `json:"detail"`
+	At           time.Time      `json:"at"`
 }
 
 // Notification tells a user about an event.
@@ -134,7 +136,7 @@ func (s *Service) History(ctx context.Context, tenantID, itemID, cursor string, 
 		}
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT seq, id, COALESCE(item_id, ''), actor_user_id, kind, detail, at FROM collab.events
+		`SELECT seq, id, COALESCE(item_id, ''), actor_user_id, COALESCE(actor_grant_id, ''), kind, detail, at FROM collab.events
 		 WHERE tenant_id = $1 AND item_id = $2 AND seq > $3 ORDER BY seq LIMIT $4`,
 		tenantID, itemID, after, limit+1)
 	if err != nil {
@@ -144,7 +146,7 @@ func (s *Service) History(ctx context.Context, tenantID, itemID, cursor string, 
 	events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
 		var e Event
 		var seq int64
-		err := row.Scan(&seq, &e.ID, &e.ItemID, &e.ActorUserID, &e.Kind, &e.Detail, &e.At)
+		err := row.Scan(&seq, &e.ID, &e.ItemID, &e.ActorUserID, &e.ActorGrantID, &e.Kind, &e.Detail, &e.At)
 		seqs = append(seqs, seq)
 		return e, err
 	})
@@ -175,7 +177,7 @@ func (s *Service) Since(ctx context.Context, c policy.Caller, cursor string, lim
 		}
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT n.id, n.read_at, n.xid::text, n.seq, e.id, COALESCE(e.item_id, ''), e.actor_user_id, e.kind, e.detail, e.at
+		`SELECT n.id, n.read_at, n.xid::text, n.seq, e.id, COALESCE(e.item_id, ''), e.actor_user_id, COALESCE(e.actor_grant_id, ''), e.kind, e.detail, e.at
 		 FROM collab.notifications n
 		 JOIN collab.events e ON e.tenant_id = n.tenant_id AND e.id = n.event_id
 		 WHERE n.tenant_id = $1 AND n.user_id = $2
@@ -191,7 +193,7 @@ func (s *Service) Since(ctx context.Context, c policy.Caller, cursor string, lim
 		var n Notification
 		var rowXID string
 		var rowSeq int64
-		err := row.Scan(&n.ID, &n.ReadAt, &rowXID, &rowSeq, &n.Event.ID, &n.Event.ItemID, &n.Event.ActorUserID, &n.Event.Kind, &n.Event.Detail, &n.Event.At)
+		err := row.Scan(&n.ID, &n.ReadAt, &rowXID, &rowSeq, &n.Event.ID, &n.Event.ItemID, &n.Event.ActorUserID, &n.Event.ActorGrantID, &n.Event.Kind, &n.Event.Detail, &n.Event.At)
 		next = rowXID + "." + strconv.FormatInt(rowSeq, 10)
 		n.Target = target(n.Event)
 		return n, err

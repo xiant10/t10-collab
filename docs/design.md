@@ -173,7 +173,7 @@ Every request goes through the shared verifier. The tenant always comes from the
 | Token | Result |
 | --- | --- |
 | A person's | Allowed, then checked by `policy` |
-| A delegated agent's | Refused until phase 5. After that, also needs `work:*` actions on every grant |
+| A delegated agent's | Refused on routes. On `/mcp`, needs the tool's `work:*` action on the token and on every grant, then `policy` checks it as the person |
 | A service's own | Refused on user routes |
 | No `tid` | Refused. Platform admins' tokens have none, and platform admins get no path into business records |
 
@@ -368,7 +368,7 @@ These are the auth service gaps, all checked against the code.
 
 Sign-in names must stay out of the new route. They're unverified and can hold someone's phone number, so teammates should see display names only.
 
-Phase 5 also adds `t10-collab` to the `runtimes` audiences in `clients.yaml`, and an MCP server entry in `agent-pi`.
+Phase 5 also added `t10-collab` to the `runtimes` audiences in `clients.yaml`, and an MCP server entry in `agent-pi`.
 
 ## Alternatives considered
 
@@ -395,7 +395,7 @@ Phase 5 also adds `t10-collab` to the `runtimes` audiences in `clients.yaml`, an
 - [x] **Should managers see their reports' items?** Each tenant decides. See "Manager visibility".
 - [ ] **Can one send go to several people?** V1 has one recipient. An item can already have several pending `share` offers, so a later version could send one to each person on a single item, with no copies.
 - [ ] **How long are closed items, soft deletes and history kept?** This depends on customer contracts, like the auth audit log.
-- [ ] **How much should an assistant be able to do?** See phase 5. The recommendation is that an agent can read and draft, and only a person can send or accept.
+- [x] **How much should an assistant be able to do?** It can read and draft, and only a person can send, accept or delete. No tool exists for those, and no runtime lists `work:send` or `work:delete`.
 
 ## Rollout
 

@@ -3,8 +3,8 @@ info:
   title: t10-collab
   version: 0.2.0
   description: >
-    Work items, offers and notifications. Every route needs a person's bearer
-    token, and the tenant comes from its tid. A forbidden item answers 404, the
+    Work items, offers and notifications. Every route but /mcp needs a person's
+    bearer token, and the tenant comes from its tid. A forbidden item answers 404, the
     same as a missing one. Lists take limit (1 to 200, default 50) and cursor,
     and return next_cursor, which is empty on the last page.
 security:
@@ -29,6 +29,40 @@ paths:
                   enabled: {type: boolean}
                   features: {type: array, items: {type: string}}
         default: {$ref: "#/components/responses/Error"}
+  /mcp:
+    post:
+      summary: Agent tools, over MCP
+      description: >
+        One JSON-RPC message per request: MCP over Streamable HTTP, with no
+        session and no stream, so GET and DELETE answer 405. initialize, ping and
+        tools/list need no token, because they hold nothing about a tenant.
+        tools/call needs a delegated token listing t10-collab, with the tool's
+        action on the token and on every grant in its chain. A refused or failed
+        tool answers 200 with isError, for the model to read. A result's text is
+        JSON inside one module_record tag, which marks it as data.
+      operationId: postMcp
+      security:
+        - {}
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "200":
+          description: A JSON-RPC response
+          content:
+            application/json:
+              schema: {type: object}
+        "202":
+          description: A notification was accepted
+        "400":
+          description: The body isn't a JSON-RPC message
+        "401":
+          description: tools/call had no valid token
+        "403":
+          description: A browser's request, or a token that isn't delegated
   /internal/v1/attention:
     get:
       summary: What needs one person, as counts
@@ -699,6 +733,7 @@ components:
         id: {type: string}
         item_id: {type: string}
         actor_user_id: {type: string}
+        actor_grant_id: {type: string, description: "Set when an agent acted for the person"}
         kind: {type: string}
         detail: {type: object}
         at: {type: string, format: date-time}

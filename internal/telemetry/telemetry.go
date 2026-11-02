@@ -43,3 +43,11 @@ func Setup(ctx context.Context, endpoint string) (func(context.Context) error, e
 func Wrap(pattern string, next http.Handler) http.Handler {
 	return otelhttp.NewHandler(next, pattern)
 }
+
+// Continue starts a span under a traceparent that came inside a message, as MCP
+// sends it, instead of in a header. The name must hold no record text.
+func Continue(ctx context.Context, traceparent, name string) (context.Context, func()) {
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier{"traceparent": traceparent})
+	ctx, span := otel.Tracer(serviceName).Start(ctx, name)
+	return ctx, func() { span.End() }
+}

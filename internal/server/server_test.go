@@ -144,10 +144,11 @@ func (o *org) set(status string, users ...string) {
 }
 
 type harness struct {
-	t    *testing.T
-	pool *pgxpool.Pool
-	org  *org
-	url  string
+	t      *testing.T
+	pool   *pgxpool.Pool
+	org    *org
+	url    string
+	server Server
 }
 
 func newHarness(t *testing.T) *harness {
@@ -180,7 +181,7 @@ func newHarness(t *testing.T) *harness {
 	})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
-	return &harness{t: t, pool: pool, org: o, url: ts.URL}
+	return &harness{t: t, pool: pool, org: o, url: ts.URL, server: *s}
 }
 
 func (h *harness) request(token, method, path string, body any) (int, map[string]any) {

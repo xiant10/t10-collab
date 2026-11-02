@@ -79,7 +79,7 @@ type handler func(w http.ResponseWriter, r *http.Request, c policy.Caller)
 
 type route struct {
 	method, pattern string
-	// action is what phase 5 will require on a delegated token.
+	// action names what the route does. Agents don't reach routes: see guard.
 	action  string
 	handler handler
 }
@@ -144,11 +144,15 @@ func (s *Server) Handler() http.Handler {
 	}
 	key := "GET " + attentionRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleAttention)))
+	key = "POST " + mcpRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleMCP)))
 	return logged(mux)
 }
 
 // guard admits a person's token only. The tenant comes from the token, and a
 // token with none, like a platform admin's, gets no path into business records.
+// Agents use /mcp instead: an action can't tell a route's admin half from the
+// rest, so work:write here would reach tenant settings for an admin's agent.
 func (s *Server) guard(rt route) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -264,6 +268,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, into any) bool {
 // failure maps a domain error to a response. Anything unknown is logged and
 // answers 500, with no detail for the caller.
 func failure(w http.ResponseWriter, r *http.Request, err error) {
+	status, code, message := classify(err)
+	if status == http.StatusInternalServerError {
+		slog.Error("request failed", "route", r.Pattern, "error", err)
+	}
+	writeError(w, status, code, message)
+}
+
+// classify names a domain error for a caller. Messages are fixed text, so they
+// never carry a record's words.
+func classify(err error) (status int, code, message string) {
 	for _, m := range []struct {
 		target error
 		status int
@@ -271,6 +285,7 @@ func failure(w http.ResponseWriter, r *http.Request, err error) {
 	}{
 		{policy.ErrNotFound, http.StatusNotFound, "not_found"},
 		{policy.ErrForbidden, http.StatusForbidden, "forbidden"},
+		{errBadArguments, http.StatusBadRequest, "invalid_request"},
 		{page.ErrBadCursor, http.StatusBadRequest, "invalid_request"},
 		{workitems.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 		{offers.ErrInvalid, http.StatusBadRequest, "invalid_request"},
@@ -296,12 +311,10 @@ func failure(w http.ResponseWriter, r *http.Request, err error) {
 		{people.ErrNotFound, http.StatusNotFound, "not_found"},
 	} {
 		if errors.Is(err, m.target) {
-			writeError(w, m.status, m.code, m.target.Error())
-			return
+			return m.status, m.code, m.target.Error()
 		}
 	}
-	slog.Error("request failed", "route", r.Pattern, "error", err)
-	writeError(w, http.StatusInternalServerError, "internal_error", "something went wrong")
+	return http.StatusInternalServerError, "internal_error", "something went wrong"
 }
 
 // limit reads a page size. A bad value answers 400 and returns false.
@@ -706,16 +719,22 @@ func (s *Server) handlePeople(w http.ResponseWriter, r *http.Request, c policy.C
 		failure(w, r, err)
 		return
 	}
-	type person struct {
-		UserID      string `json:"user_id"`
-		DisplayName string `json:"display_name"`
-		OrgUnitID   string `json:"org_unit_id,omitempty"`
-	}
 	found := make([]person, len(members))
 	for i, m := range members {
-		found[i] = person{UserID: m.UserID, DisplayName: m.DisplayName, OrgUnitID: m.OrgUnitID}
+		found[i] = personOf(m)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"people": found, "next_cursor": next})
+}
+
+// person is what one member may read about another.
+type person struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	OrgUnitID   string `json:"org_unit_id,omitempty"`
+}
+
+func personOf(m people.Member) person {
+	return person{UserID: m.UserID, DisplayName: m.DisplayName, OrgUnitID: m.OrgUnitID}
 }
 
 func (s *Server) handleUnits(w http.ResponseWriter, r *http.Request, c policy.Caller) {

@@ -6,7 +6,7 @@ It has no link to `agent-pi` tasks. Users see "task", but code, schema and API s
 
 ## Status
 
-Rollout steps 1 to 4 are built. V1 is an API with no client. The one step left is agents, step 5, so delegated tokens are still refused.
+All five rollout steps are built. V1 is an API with no client of its own, and agents reach it over MCP at `/mcp`.
 
 ### Changes from the design
 
@@ -27,6 +27,8 @@ Rollout steps 1 to 4 are built. V1 is an API with no client. The one step left i
 | `GET /v1/lists/{id}` isn't listed | Added, with members | A client has no other way to read them |
 | Removing or demoting a list's last owner isn't covered | Refused with `409 last_list_owner` | A list with no owner can't be managed |
 | Changing a link to another unit isn't covered | The old unit's members become `manual`, the same as clearing | Nobody loses access by surprise |
+| Agents get `work:send` and `work:delete` tools, outside default grants | No such tools | The design's open question recommended read and draft only. Fewer tools means less for injected text to reach |
+| Delegated tokens use the API like any caller | Routes still refuse them, and only `/mcp` takes them | One action can't tell `PUT /v1/admin/settings` from an ordinary write, so `work:write` would reach settings for an admin's agent |
 
 The first three, and the four on departures, come from the design review. `docs/design.md` now describes departures as built.
 
@@ -42,6 +44,31 @@ go run ./cmd/testclient
 The auth stack has to include the prerequisite changes, and its setup has to have run once since, so that the `t10-collab` service account exists.
 
 `testclient` signs in with the auth service's dev password grant and walks through declining, accepting, assigning, notifications, lists, unit links, manager visibility and tenant isolation.
+
+## Agents
+
+`POST /mcp` offers these tools, and `agent-pi` connects with `auth: "grant"`:
+
+| Action | Tools |
+| --- | --- |
+| `work:read` | `work_list`, `work_get`, `work_comments`, `work_history`, `work_offers`, `work_lists`, `work_people` |
+| `work:write` | `work_create`, `work_update`, `work_comment` |
+
+- Tools call the same services as the routes, so an agent can do no more than its person.
+- A write records the grant in `events.actor_grant_id`, and the event shows it as `actor_grant_id`.
+- A result is JSON inside one `<module_record>` tag, which `agent-pi`'s prompt treats as data. Other people's text can't close the tag, because JSON writes `<` as `\u003c`.
+- A grant with constraints is refused, because none are defined here yet.
+- Listing needs no token, because `agent-pi` lists at startup with no user. The list holds nothing about a tenant.
+
+To turn it on, deploy `auth-server` first, because `agent-pi` asks for what `clients.yaml` allows. Then set these on `agent-pi`:
+
+```sh
+COLLAB_MCP_URL=http://t10-collab:8082/mcp
+GRANT_ACTIONS=agent:use,work:read,work:write
+GRANT_AUDIENCES=agent-pi,t10-collab
+```
+
+A conversation keeps the grant it opened with, so one from before this change has no access to the tools. A new conversation does.
 
 ## Test
 
@@ -62,7 +89,7 @@ Tests need a throwaway Postgres, because they drop the `collab` schema. Without 
 | `internal/policy` | Every access rule, tenant settings, and the SQL filter for "items this user can see" |
 | `internal/activity` | Item history and in-app notifications |
 | `internal/people` | Org reads from the auth service. They fail closed |
-| `internal/server` | HTTP routes, with the required action declared on each one |
+| `internal/server` | HTTP routes, with the required action declared on each one, and the agent tools in `mcp.go` |
 | `verifier` | Copied from `auth-server`, which has no remote to import from. Keep the two identical |
 | `docs/openapi.yaml` | The API. A test keeps it in step with the routes |
 
