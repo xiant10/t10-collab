@@ -16,6 +16,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 const (
@@ -130,6 +133,7 @@ func (c *Client) ownToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return "", err
@@ -166,6 +170,7 @@ func (c *Client) get(ctx context.Context, tenantID, path string, query url.Value
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
