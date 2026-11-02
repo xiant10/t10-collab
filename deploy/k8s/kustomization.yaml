@@ -1,0 +1,6 @@
+# This component's manifests. deploy/k8s/base in the workspace includes them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - t10-collab.yaml
