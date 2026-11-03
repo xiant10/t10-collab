@@ -20,7 +20,7 @@ Two gaps must close first. The auth service gives a module no way to list a tena
 
 V1 is an API with no client. The client is a later project, so no one can use the module until it ships.
 
-This is the first business module. It meets the contract in `../../ARCHITECTURE.md`, which adds a manifest, a `target` reference on notifications and attention counts for `t10-notify`. The daily digest lives in `t10-notify`, not here.
+This is the first business module. It meets the contract in `../../contracts/module/README.md`, which adds a manifest, a `target` reference on notifications and attention counts for `t10-notify`. The daily digest lives in `t10-notify`, not here.
 
 ## Terms
 

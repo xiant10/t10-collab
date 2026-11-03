@@ -93,6 +93,10 @@ Tests need a throwaway Postgres, because they drop the `collab` schema. Without 
 | `verifier` | Copied from `auth-server`, which has no remote to import from. Keep the two identical |
 | `docs/openapi.yaml` | The API. A test keeps it in step with the routes |
 
-This service meets the module contract in `../ARCHITECTURE.md`. Clients find it through `GET /v1/module`, and `GET /internal/v1/attention` answers only `t10-notify`'s service token.
+This service meets the module contract in `../contracts/module/README.md`. Clients find it through `GET /v1/module`, and `GET /internal/v1/attention` answers only `t10-notify`'s service token.
 
 A forbidden item answers `404`, the same as a missing one. A caller who can see an item, but can't do what they asked, gets `403`.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
