@@ -11,12 +11,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xiant10/t10-modkit/people"
+
 	"t10-collab/internal/activity"
 	"t10-collab/internal/config"
 	"t10-collab/internal/db"
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
-	"t10-collab/internal/people"
 	"t10-collab/internal/server"
 	"t10-collab/internal/sweep"
 	"t10-collab/internal/telemetry"

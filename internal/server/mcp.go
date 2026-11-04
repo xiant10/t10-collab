@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xiant10/t10-modkit/people"
+
 	"t10-collab/internal/offers"
-	"t10-collab/internal/people"
 	"t10-collab/internal/policy"
 	"t10-collab/internal/telemetry"
 	"t10-collab/internal/workitems"

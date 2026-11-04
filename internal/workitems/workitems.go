@@ -15,11 +15,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/xiant10/t10-modkit/ids"
+	"github.com/xiant10/t10-modkit/page"
+	"github.com/xiant10/t10-modkit/people"
 
 	"t10-collab/internal/activity"
-	"t10-collab/internal/ids"
-	"t10-collab/internal/page"
-	"t10-collab/internal/people"
 	"t10-collab/internal/policy"
 )
 

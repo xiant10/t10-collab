@@ -88,7 +88,7 @@ Tests need a throwaway Postgres, because they drop the `collab` schema. Without 
 | `internal/sweep` | The 15-minute job: team-linked lists, and moving work from people who leave |
 | `internal/policy` | Every access rule, tenant settings, and the SQL filter for "items this user can see" |
 | `internal/activity` | Item history and in-app notifications |
-| `internal/people` | Org reads from the auth service. They fail closed |
+| `third_party/t10-modkit/people` | Org reads from the auth service. They fail closed |
 | `internal/server` | HTTP routes, with the required action declared on each one, and the agent tools in `mcp.go` |
 | `verifier` | Copied from `auth-server`, which has no remote to import from. Keep the two identical |
 | `docs/openapi.yaml` | The API. A test keeps it in step with the routes |
@@ -100,3 +100,5 @@ A forbidden item answers `404`, the same as a missing one. A caller who can see 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+Shared org reads, IDs and pagination now come from `t10-modkit`. Until its first published release, this repo carries a source snapshot under `third_party/t10-modkit` so standalone builds require no sibling checkout. The workspace `scripts/check-modkit.sh` checks snapshot parity.

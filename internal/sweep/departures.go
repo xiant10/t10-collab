@@ -8,10 +8,10 @@ import (
 	"slices"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xiant10/t10-modkit/people"
 
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
-	"t10-collab/internal/people"
 	"t10-collab/internal/policy"
 	"t10-collab/internal/workitems"
 )
