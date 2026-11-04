@@ -27,23 +27,25 @@ spec:
           image: t10-collab:latest
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 8082
+            - containerPort: 18040
           env:
+            - name: COLLAB_LISTEN_ADDR
+              value: ":18040"
             - name: AUTH_ISSUER
               value: https://auth.example.com
             - name: AUTH_URL
-              value: http://auth-server.t10.svc.cluster.local:8081
+              value: http://auth-server.t10.svc.cluster.local:18000
           envFrom:
             - secretRef:
                 name: t10-collab
           readinessProbe:
             httpGet:
               path: /readyz
-              port: 8082
+              port: 18040
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8082
+              port: 18040
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -59,4 +61,4 @@ spec:
   selector:
     app.kubernetes.io/name: t10-collab
   ports:
-    - port: 8082
+    - port: 18040

@@ -17,6 +17,6 @@ COPY --from=build /out/t10-collab /usr/local/bin/
 
 USER 65534:65534
 
-EXPOSE 8082
+EXPOSE 18040
 
 ENTRYPOINT ["/usr/local/bin/t10-collab"]
