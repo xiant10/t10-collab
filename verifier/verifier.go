@@ -71,6 +71,11 @@ type Agent struct {
 	// Runtime is the service account running the agent.
 	Runtime string
 	GrantID string
+	// Trigger says why the run is running: user, voice, schedule, event,
+	// webhook or agent. Automation names the automation that started it, if one
+	// did. Both come from the signed token, never from a header.
+	Trigger    string
+	Automation string
 	// Chain runs from the root grant to this one.
 	Chain []Link
 }
@@ -120,7 +125,9 @@ type claims struct {
 	Actor    *struct {
 		Subject string `json:"sub"`
 	} `json:"act"`
-	Grant string `json:"grant"`
+	Grant      string `json:"grant"`
+	Trigger    string `json:"trg"`
+	Automation string `json:"automation"`
 }
 
 type cachedChain struct {
@@ -191,7 +198,9 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Identity, error) {
 			return nil, err
 		}
 		identity.UserID = parsed.Subject
-		identity.Agent = &Agent{Runtime: parsed.Actor.Subject, GrantID: parsed.Grant, Chain: chain}
+		identity.Agent = &Agent{
+			Runtime: parsed.Actor.Subject, GrantID: parsed.Grant, Trigger: parsed.Trigger, Automation: parsed.Automation, Chain: chain,
+		}
 	case !slices.Contains(parsed.Audience, audienceT10):
 		return nil, fmt.Errorf("%w: audience not accepted", ErrInvalidToken)
 	case parsed.Session != "":
