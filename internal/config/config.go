@@ -17,7 +17,7 @@ type Config struct {
 	// ClientID is this service's account name at the auth service.
 	ClientID     string
 	ClientSecret string
-	// OTLPEndpoint is an OTLP/gRPC host:port. Empty turns telemetry off.
+	// OTLPEndpoint is an OTLP/HTTP URL, such as http://collector:4318. Empty turns telemetry off.
 	OTLPEndpoint string
 }
 
