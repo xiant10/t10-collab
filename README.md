@@ -1,8 +1,18 @@
-# t10-collab
+# t10 Collab
 
-People in a tenant send work to each other and manage it together. This is a small Go service with its own Postgres database, and it trusts the auth service for identity and org facts only. [docs/design.md](docs/design.md) explains why.
+Multi-tenant task and work item collaboration service for the t10 platform.
 
-It has no link to `agent-pi` tasks. Users see "task", but code, schema and API say **work item**, so a search for `task` in t10 only ever finds agent work.
+## Project Description
+
+**t10 Collab** is a lightweight, dedicated Go microservice with PostgreSQL persistence that enables team members and AI agents within a tenant to coordinate work items. It manages the full lifecycle of tasks, assignments, collaborative offers, comments, shared backlogs, and real-time activity feeds with complete tenant isolation.
+
+### Key Capabilities
+
+- **Work Item Management**: Full lifecycle tracking of work items—including creation, assignments, collaborative offers, status transitions, transfers, and closures.
+- **Agent Integration via MCP**: Exposes a Model Context Protocol (MCP) server at `/mcp` allowing AI agents to read (`work:read`) and write (`work:write`) work items using delegated caller grants.
+- **Safe Delegation & Offers**: Handles multi-party assignments and temporary offers with automatic expiration and successor handoffs when members depart.
+- **Real-Time Notification Feeds**: Keyset-cursor notification streams (`GET /v1/notifications`) to keep clients and agents updated on status changes and assignments.
+- **Zero Business Logic Bleed**: Operates strictly within tenant boundaries, delegating identity and org verification exclusively to `auth-server`.
 
 ## Status
 
