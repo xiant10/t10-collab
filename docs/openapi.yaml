@@ -126,7 +126,24 @@ paths:
       summary: Read one item
       operationId: getWorkItem
       responses:
-        "200": {$ref: "#/components/responses/Item"}
+        "200":
+          description: The item, and what the caller may do to it. A manager's read can do nothing.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: "#/components/schemas/Item"}
+                  - type: object
+                    properties:
+                      can:
+                        type: object
+                        properties:
+                          edit: {type: boolean}
+                          cancel: {type: boolean, description: Also covers reopening a cancelled item}
+                          claim: {type: boolean}
+                          send: {type: boolean}
+                          delete: {type: boolean}
+                          manage_people: {type: boolean, description: Add and remove collaborators}
         default: {$ref: "#/components/responses/Error"}
     patch:
       summary: Edit fields or status

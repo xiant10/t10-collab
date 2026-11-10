@@ -373,12 +373,15 @@ func (s *Server) handleListItems(w http.ResponseWriter, r *http.Request, c polic
 }
 
 func (s *Server) handleGetItem(w http.ResponseWriter, r *http.Request, c policy.Caller) {
-	item, err := s.Items.View(r.Context(), c, r.PathValue("id"))
+	item, relation, err := s.Items.ViewAs(r.Context(), c, r.PathValue("id"))
 	if err != nil {
 		failure(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, item)
+	writeJSON(w, http.StatusOK, struct {
+		workitems.Item
+		Can policy.Can `json:"can"`
+	}{item, relation.Can(item.Closed())})
 }
 
 func (s *Server) handleUpdateItem(w http.ResponseWriter, r *http.Request, c policy.Caller) {

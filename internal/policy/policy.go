@@ -141,5 +141,24 @@ func (r Relation) CanCancel() bool { return r.Creator || r.Owner }
 // list item is nobody else's work, so its creator can delete it.
 func (r Relation) CanDelete() bool { return r.Owner || (r.Unowned && r.Creator) }
 
+// Can is what a caller may do to one item, so that a screen offers only what will
+// work. The routes still decide each request.
+type Can struct {
+	Edit         bool `json:"edit"`
+	Cancel       bool `json:"cancel"`
+	Claim        bool `json:"claim"`
+	Send         bool `json:"send"`
+	Delete       bool `json:"delete"`
+	ManagePeople bool `json:"manage_people"`
+}
+
+// Can reads the relation as actions. A closed item can't be claimed.
+func (r Relation) Can(closed bool) Can {
+	return Can{
+		Edit: r.CanEdit(), Cancel: r.CanCancel(), Claim: r.CanClaim() && !closed, Send: r.CanSend(),
+		Delete: r.CanDelete(), ManagePeople: r.CanManagePeople(),
+	}
+}
+
 // CanWithdraw is an offer's sender, or any owner.
 func (r Relation) CanWithdraw(sender bool) bool { return sender || r.Owner }
