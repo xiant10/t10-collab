@@ -396,6 +396,7 @@ Phase 5 also added `t10-collab` to the `runtimes` audiences in `clients.yaml`, a
 - [ ] **Can one send go to several people?** V1 has one recipient. An item can already have several pending `share` offers, so a later version could send one to each person on a single item, with no copies.
 - [ ] **How long are closed items, soft deletes and history kept?** This depends on customer contracts, like the auth audit log.
 - [x] **How much should an assistant be able to do?** It can read and draft, and only a person can send, accept or delete. No tool exists for those, and no runtime lists `work:send` or `work:delete`.
+- [ ] **Agent teammates, proposed.** A tenant agent account is a member, so it could receive, own and send items like a person: a peer's send is an offer it accepts or declines by its instructions, its manager's send is an assignment, and it can claim from lists it's on. The assistant rule above still holds, because send, accept, decline and claim tools would be allowed only when the token's principal is an agent account acting on its own items. It adds `accepts_from` checked on each send, a limit on items passed from agent to agent with no person acting, a send rate for agent accounts, and events posted to `t10-automations`. Decision 1 keeps its point, since work items still aren't agent tasks. See [`t10-agent-control/docs/tenant-agents.md`](../../t10-agent-control/docs/tenant-agents.md), Part 2.
 
 ## Rollout
 
