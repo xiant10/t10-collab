@@ -103,9 +103,12 @@ paths:
       summary: List the items the caller can see
       operationId: listWorkItems
       parameters:
-        - {name: view, in: query, schema: {type: string, enum: [owned, sent, collaborating, list, reports]}, description: "reports is empty unless the tenant's manager_visibility allows it"}
+        - {name: view, in: query, schema: {type: string, enum: [owned, sent, collaborating, list, reports, claimable]}, description: "reports is empty unless the tenant's manager_visibility allows it. claimable is open, unowned items on the caller's unarchived lists"}
         - {name: list, in: query, schema: {type: string}, description: Required with view=list}
-        - {name: status, in: query, schema: {$ref: "#/components/schemas/Status"}}
+        - {name: status, in: query, schema: {type: string, enum: [todo, doing, done, cancelled, open]}, description: open is todo and doing}
+        - {name: q, in: query, schema: {type: string, maxLength: 300}, description: Part of the title, ignoring case}
+        - {name: due_from, in: query, schema: {type: string, format: date-time}, description: Due at or after this. Leaves out items with no due date}
+        - {name: due_before, in: query, schema: {type: string, format: date-time}, description: Due before this. Leaves out items with no due date}
         - {$ref: "#/components/parameters/limit"}
         - {$ref: "#/components/parameters/cursor"}
       responses:
@@ -410,7 +413,7 @@ paths:
         "204": {description: Saved}
         default: {$ref: "#/components/responses/Error"}
     delete:
-      summary: Remove a member. An org member answers managed_by_unit
+      summary: Remove a member, as a list owner, or leave the list as yourself. An org member answers managed_by_unit
       operationId: removeListMember
       responses:
         "204": {description: Removed}
@@ -672,6 +675,13 @@ components:
               user_id: {type: string}
               role: {type: string, enum: [owner, member]}
               source: {type: string, enum: [manual, org]}
+        counts:
+          type: object
+          description: Filled on the caller's page of lists
+          properties:
+            open: {type: integer, description: Items to do or in progress}
+            unclaimed: {type: integer, description: Open items nobody owns}
+            members: {type: integer}
     Settings:
       type: object
       required: [manager_visibility]

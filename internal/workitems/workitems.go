@@ -38,7 +38,12 @@ const (
 	ViewCollaborating = "collaborating"
 	ViewList          = "list"
 	ViewReports       = "reports"
+	// ViewClaimable is open, unowned items on the caller's unarchived lists.
+	ViewClaimable = "claimable"
 )
+
+// StatusOpen filters for todo and doing together. It's never an item's status.
+const StatusOpen = "open"
 
 const (
 	maxTitle       = 300
@@ -503,8 +508,16 @@ func RemoveDeparted(ctx context.Context, tx pgx.Tx, c policy.Caller, id string, 
 // Filter selects a page of the item list.
 type Filter struct {
 	View, Status, ListID, Cursor string
-	Limit                        int
+	// Query matches part of a title, ignoring case.
+	Query string
+	// DueFrom and DueBefore bound due_at, from inclusive and before exclusive.
+	// Either one leaves out items with no due date.
+	DueFrom, DueBefore *time.Time
+	Limit              int
 }
+
+// likeEscaper keeps a search's own % and _ from acting as wildcards.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
 
 // List returns one page of the items the caller can see. The policy filter is in
 // the query, so a page is always full if more visible rows exist.
@@ -515,6 +528,11 @@ func (s *Service) List(ctx context.Context, c policy.Caller, f Filter) ([]Item, 
 	}
 	visible := policy.VisibleSQL("$1", "$2")
 	args := []any{c.TenantID, c.UserID, f.Status, after, at, id, f.Limit + 1}
+	// arg adds a value and returns its placeholder, after the seven fixed ones.
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
 	view := ""
 	switch f.View {
 	case "":
@@ -522,31 +540,46 @@ func (s *Service) List(ctx context.Context, c policy.Caller, f Filter) ([]Item, 
 		if f.ListID == "" {
 			return nil, "", ErrInvalid
 		}
-		args = append(args, f.ListID)
-		view = "AND i.list_id = $8"
+		view = "AND i.list_id = " + arg(f.ListID)
 	case ViewReports:
 		reports, err := s.managed(ctx, c)
 		if err != nil {
 			return nil, "", err
 		}
 		// $2 stays in the query so that the arguments keep their numbers.
-		args = append(args, reports)
-		visible = policy.ReportsSQL("$1", "$8::text[]") + " AND $2::text <> ''"
+		visible = policy.ReportsSQL("$1", arg(reports)+"::text[]") + " AND $2::text <> ''"
 	case ViewOwned:
 		view = "AND EXISTS (SELECT 1 FROM collab.work_item_owners v WHERE v.tenant_id = i.tenant_id AND v.item_id = i.id AND v.user_id = $2)"
 	case ViewSent:
 		view = "AND EXISTS (SELECT 1 FROM collab.offers v WHERE v.tenant_id = i.tenant_id AND v.item_id = i.id AND v.from_user_id = $2)"
 	case ViewCollaborating:
 		view = "AND EXISTS (SELECT 1 FROM collab.work_item_collaborators v WHERE v.tenant_id = i.tenant_id AND v.item_id = i.id AND v.user_id = $2)"
+	case ViewClaimable:
+		view = `AND i.status IN ('todo', 'doing')
+		   AND EXISTS (SELECT 1 FROM collab.list_members v WHERE v.tenant_id = i.tenant_id AND v.list_id = i.list_id AND v.user_id = $2)
+		   AND EXISTS (SELECT 1 FROM collab.lists l WHERE l.tenant_id = i.tenant_id AND l.id = i.list_id AND l.archived_at IS NULL)
+		   AND NOT EXISTS (SELECT 1 FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id)`
 	default:
 		return nil, "", ErrInvalid
 	}
-	if f.Status != "" && !slices.Contains([]string{StatusTodo, StatusDoing, StatusDone, StatusCancelled}, f.Status) {
+	if f.Status != "" && !slices.Contains([]string{StatusTodo, StatusDoing, StatusDone, StatusCancelled, StatusOpen}, f.Status) {
 		return nil, "", ErrInvalid
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		if utf8.RuneCountInString(q) > maxTitle {
+			return nil, "", ErrInvalid
+		}
+		view += " AND i.title ILIKE '%' || " + arg(likeEscaper.Replace(q)) + " || '%'"
+	}
+	if f.DueFrom != nil {
+		view += " AND i.due_at >= " + arg(*f.DueFrom)
+	}
+	if f.DueBefore != nil {
+		view += " AND i.due_at < " + arg(*f.DueBefore)
 	}
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+itemColumns+" FROM collab.work_items i WHERE "+visible+" "+view+`
-		   AND ($3 = '' OR i.status = $3)
+		   AND ($3 = '' OR i.status = $3 OR ($3 = 'open' AND i.status IN ('todo', 'doing')))
 		   AND (NOT $4 OR (i.created_at, i.id) < ($5, $6))
 		 ORDER BY i.created_at DESC, i.id DESC LIMIT $7`,
 		args...)

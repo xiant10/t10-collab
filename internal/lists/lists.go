@@ -68,6 +68,15 @@ type List struct {
 	ArchivedAt *time.Time `json:"archived_at"`
 	// Members is filled on a single read.
 	Members []Member `json:"members,omitempty"`
+	// Counts is filled on the caller's page of lists.
+	Counts *Counts `json:"counts,omitempty"`
+}
+
+// Counts sums up a list for an overview. Open is todo and doing.
+type Counts struct {
+	Open      int `json:"open"`
+	Unclaimed int `json:"unclaimed"`
+	Members   int `json:"members"`
 }
 
 // Service manages lists.
@@ -121,14 +130,19 @@ func scanList(row pgx.Row) (List, error) {
 	return l, err
 }
 
-// Mine returns one page of the lists the caller is on, newest first.
+// Mine returns one page of the lists the caller is on, newest first, with counts.
 func (s *Service) Mine(ctx context.Context, c policy.Caller, archived bool, cursor string, limit int) ([]List, string, error) {
 	at, id, after, err := page.Decode(cursor)
 	if err != nil {
 		return nil, "", err
 	}
 	rows, err := s.pool.Query(ctx,
-		"SELECT "+listColumns+` FROM collab.lists l
+		"SELECT "+listColumns+`,
+		   (SELECT count(*) FROM collab.work_items i WHERE i.tenant_id = l.tenant_id AND i.list_id = l.id AND i.deleted_at IS NULL AND i.status IN ('todo', 'doing')),
+		   (SELECT count(*) FROM collab.work_items i WHERE i.tenant_id = l.tenant_id AND i.list_id = l.id AND i.deleted_at IS NULL AND i.status IN ('todo', 'doing')
+		      AND NOT EXISTS (SELECT 1 FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id)),
+		   (SELECT count(*) FROM collab.list_members a WHERE a.tenant_id = l.tenant_id AND a.list_id = l.id)
+		 FROM collab.lists l
 		 JOIN collab.list_members m ON m.tenant_id = l.tenant_id AND m.list_id = l.id AND m.user_id = $2
 		 WHERE l.tenant_id = $1 AND (l.archived_at IS NOT NULL) = $3 AND (NOT $4 OR (l.created_at, l.id) < ($5, $6))
 		 ORDER BY l.created_at DESC, l.id DESC LIMIT $7`,
@@ -136,7 +150,13 @@ func (s *Service) Mine(ctx context.Context, c policy.Caller, archived bool, curs
 	if err != nil {
 		return nil, "", fmt.Errorf("list lists: %w", err)
 	}
-	found, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (List, error) { return scanList(row) })
+	found, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (List, error) {
+		var l List
+		var n Counts
+		err := row.Scan(&l.ID, &l.Name, &l.OrgUnitID, &l.CreatedAt, &l.ArchivedAt, &n.Open, &n.Unclaimed, &n.Members)
+		l.Counts = &n
+		return l, err
+	})
 	if err != nil {
 		return nil, "", fmt.Errorf("list lists: %w", err)
 	}
@@ -506,15 +526,21 @@ func RemoveDeparted(ctx context.Context, tx pgx.Tx, c policy.Caller, id string, 
 	})
 }
 
-// RemoveMember takes someone off a list. Items don't move, so they keep anything
-// they own or collaborate on. Removing nobody is no error, so a retry succeeds.
+// RemoveMember takes someone off a list, for a list owner, or for anyone leaving
+// it. Items don't move, so they keep anything they own or collaborate on.
+// Removing nobody is no error, so a retry succeeds.
 func (s *Service) RemoveMember(ctx context.Context, c policy.Caller, id, userID string) error {
+	leaving := userID == c.UserID
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := lockOwned(ctx, tx, c, id); err != nil {
+		role, err := lockRole(ctx, tx, c, id)
+		if err != nil {
 			return err
 		}
-		var role, source string
-		err := tx.QueryRow(ctx, "SELECT role, source FROM collab.list_members WHERE tenant_id = $1 AND list_id = $2 AND user_id = $3",
+		if role != RoleOwner && !leaving {
+			return policy.ErrForbidden
+		}
+		var source string
+		err = tx.QueryRow(ctx, "SELECT role, source FROM collab.list_members WHERE tenant_id = $1 AND list_id = $2 AND user_id = $3",
 			c.TenantID, id, userID).Scan(&role, &source)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -538,8 +564,12 @@ func (s *Service) RemoveMember(ctx context.Context, c policy.Caller, id, userID 
 			c.TenantID, id, userID); err != nil {
 			return fmt.Errorf("remove member: %w", err)
 		}
+		notify := []string{userID}
+		if leaving {
+			notify = nil
+		}
 		return activity.Record(ctx, tx, c, activity.Change{
-			Kind: "list.member_removed", Detail: map[string]any{"list_id": id, "user_id": userID}, Notify: []string{userID},
+			Kind: "list.member_removed", Detail: map[string]any{"list_id": id, "user_id": userID}, Notify: notify,
 		})
 	})
 }
