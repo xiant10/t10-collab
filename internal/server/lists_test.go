@@ -417,3 +417,91 @@ func TestAnItemSaysWhatTheCallerCanDo(t *testing.T) {
 		t.Error("a closed item can be claimed")
 	}
 }
+
+func TestClaimableItemsAndListCounts(t *testing.T) {
+	h := newHarness(t)
+	list := h.list("ada", "bob")
+	open := h.listItem("ada", list, true)
+	taken := h.listItem("ada", list, true)
+	h.want("ada", "POST", "/v1/work-items/"+taken+"/claim", nil, http.StatusOK)
+	done := h.listItem("ada", list, true)
+	h.want("ada", "PATCH", "/v1/work-items/"+done, map[string]any{"version": 1, "status": "done"}, http.StatusOK)
+	other := h.list("dan")
+	h.listItem("dan", other, true)
+
+	ids := func(user, query string) []string {
+		t.Helper()
+		out := []string{}
+		for _, i := range h.want(user, "GET", "/v1/work-items?"+query, nil, http.StatusOK)["items"].([]any) {
+			out = append(out, i.(map[string]any)["id"].(string))
+		}
+		return out
+	}
+	if got := ids("bob", "view=claimable"); !slices.Equal(got, []string{open}) {
+		t.Errorf("claimable = %v, want %v", got, []string{open})
+	}
+
+	var counts map[string]any
+	for _, l := range h.want("bob", "GET", "/v1/lists", nil, http.StatusOK)["lists"].([]any) {
+		if l.(map[string]any)["id"] == list {
+			counts = l.(map[string]any)["counts"].(map[string]any)
+		}
+	}
+	if counts["open"] != 2.0 || counts["unclaimed"] != 1.0 || counts["members"] != 2.0 {
+		t.Errorf("counts = %v", counts)
+	}
+
+	// An archived list offers nothing to claim.
+	h.want("ada", "PATCH", "/v1/lists/"+list, map[string]any{"archived": true}, http.StatusOK)
+	if got := ids("bob", "view=claimable"); len(got) != 0 {
+		t.Errorf("claimable on an archived list = %v", got)
+	}
+}
+
+func TestSearchAndDueFiltersRunBeforePagination(t *testing.T) {
+	h := newHarness(t)
+	create := func(title, due string) string {
+		body := map[string]any{"title": title}
+		if due != "" {
+			body["due_at"] = due
+		}
+		return h.want("ada", "POST", "/v1/work-items", body, http.StatusCreated)["id"].(string)
+	}
+	report := create("Quarterly Report", "2030-01-10T00:00:00Z")
+	create("Lunch", "2030-01-11T00:00:00Z")
+	percent := create("Raise to 100%", "")
+	for range 3 {
+		create("Filler", "")
+	}
+	count := func(query string) int {
+		t.Helper()
+		return len(h.want("ada", "GET", "/v1/work-items?view=owned&limit=2&"+query, nil, http.StatusOK)["items"].([]any))
+	}
+	if got := h.want("ada", "GET", "/v1/work-items?view=owned&limit=1&q=report", nil, http.StatusOK)["items"].([]any); len(got) != 1 || got[0].(map[string]any)["id"] != report {
+		t.Errorf("q=report = %v", got)
+	}
+	if got := h.want("ada", "GET", "/v1/work-items?view=owned&q=%25", nil, http.StatusOK)["items"].([]any); len(got) != 1 || got[0].(map[string]any)["id"] != percent {
+		t.Errorf("q=%% matched %d items, want only the one with a percent sign", len(got))
+	}
+	if got := count("due_before=2030-01-11T00:00:00Z"); got != 1 {
+		t.Errorf("due_before = %d", got)
+	}
+	if got := count("due_from=2030-01-11T00:00:00Z&due_before=2030-01-12T00:00:00Z"); got != 1 {
+		t.Errorf("one day = %d", got)
+	}
+	h.want("ada", "PATCH", "/v1/work-items/"+report, map[string]any{"version": 1, "status": "done"}, http.StatusOK)
+	if got := len(h.want("ada", "GET", "/v1/work-items?view=owned&status=open", nil, http.StatusOK)["items"].([]any)); got != 5 {
+		t.Errorf("status=open = %d", got)
+	}
+	h.wantError("ada", "GET", "/v1/work-items?due_before=tomorrow", nil, http.StatusBadRequest, "invalid_request")
+}
+
+func TestAMemberCanLeaveAList(t *testing.T) {
+	h := newHarness(t)
+	list := h.list("ada", "bob", "dan")
+	h.wantError("bob", "DELETE", "/v1/lists/"+list+"/members/dan", nil, http.StatusForbidden, "forbidden")
+	h.want("bob", "DELETE", "/v1/lists/"+list+"/members/bob", nil, http.StatusNoContent)
+	h.wantError("bob", "GET", "/v1/lists/"+list, nil, http.StatusNotFound, "not_found")
+	// The last owner still can't leave.
+	h.wantError("ada", "DELETE", "/v1/lists/"+list+"/members/ada", nil, http.StatusConflict, "last_list_owner")
+}

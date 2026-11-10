@@ -362,9 +362,20 @@ func (s *Server) handleListItems(w http.ResponseWriter, r *http.Request, c polic
 		return
 	}
 	q := r.URL.Query()
-	items, next, err := s.Items.List(r.Context(), c, workitems.Filter{
-		View: q.Get("view"), Status: q.Get("status"), ListID: q.Get("list"), Cursor: q.Get("cursor"), Limit: n,
-	})
+	f := workitems.Filter{
+		View: q.Get("view"), Status: q.Get("status"), ListID: q.Get("list"), Query: q.Get("q"), Cursor: q.Get("cursor"), Limit: n,
+	}
+	for key, into := range map[string]**time.Time{"due_from": &f.DueFrom, "due_before": &f.DueBefore} {
+		if raw := q.Get(key); raw != "" {
+			at, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				failure(w, r, workitems.ErrInvalid)
+				return
+			}
+			*into = &at
+		}
+	}
+	items, next, err := s.Items.List(r.Context(), c, f)
 	if err != nil {
 		failure(w, r, err)
 		return
