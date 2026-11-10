@@ -383,3 +383,37 @@ func TestOnlyOneReplicaSweeps(t *testing.T) {
 		t.Errorf("swept while another replica held the lock: %v", got)
 	}
 }
+
+func TestAnItemSaysWhatTheCallerCanDo(t *testing.T) {
+	h := newHarness(t)
+	list := h.list("ada", "bob")
+	item := h.listItem("ada", list, true)
+	can := func(user string) map[string]any {
+		t.Helper()
+		return h.want(user, "GET", "/v1/work-items/"+item, nil, http.StatusOK)["can"].(map[string]any)
+	}
+	want := func(user string, expected map[string]bool) {
+		t.Helper()
+		got := can(user)
+		for k, v := range expected {
+			if got[k] != v {
+				t.Errorf("%s can %s = %v, want %v", user, k, got[k], v)
+			}
+		}
+	}
+
+	// A list member who didn't create it can work on it and take it, not delete it.
+	want("bob", map[string]bool{"edit": true, "claim": true, "send": true, "delete": false, "cancel": false, "manage_people": false})
+	want("ada", map[string]bool{"edit": true, "claim": true, "delete": true, "cancel": true, "manage_people": true})
+
+	h.want("bob", "POST", "/v1/work-items/"+item+"/claim", nil, http.StatusOK)
+	want("bob", map[string]bool{"claim": false, "delete": true, "cancel": true, "send": true})
+	want("ada", map[string]bool{"claim": false, "delete": false, "send": false, "edit": true})
+
+	// Nobody claims a closed item.
+	closed := h.listItem("ada", list, true)
+	h.want("ada", "PATCH", "/v1/work-items/"+closed, map[string]any{"version": 1, "status": "done"}, http.StatusOK)
+	if h.want("bob", "GET", "/v1/work-items/"+closed, nil, http.StatusOK)["can"].(map[string]any)["claim"] != false {
+		t.Error("a closed item can be claimed")
+	}
+}

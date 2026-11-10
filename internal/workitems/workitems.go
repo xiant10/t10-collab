@@ -279,22 +279,28 @@ func (s *Service) Read(ctx context.Context, c policy.Caller, id string) (Item, p
 // The org read happens only for a read that would otherwise fail, so ordinary
 // reads keep working through an auth outage, and a failed read grants nothing.
 func (s *Service) View(ctx context.Context, c policy.Caller, id string) (Item, error) {
-	item, _, err := s.Read(ctx, c, id)
+	item, _, err := s.ViewAs(ctx, c, id)
+	return item, err
+}
+
+// ViewAs is View with the caller's relation, which is empty for a manager's read.
+func (s *Service) ViewAs(ctx context.Context, c policy.Caller, id string) (Item, policy.Relation, error) {
+	item, relation, err := s.Read(ctx, c, id)
 	if !errors.Is(err, policy.ErrNotFound) {
-		return item, err
+		return item, relation, err
 	}
 	item, err = readRow(ctx, s.pool, c.TenantID, id)
 	if err != nil {
-		return Item{}, err
+		return Item{}, policy.Relation{}, err
 	}
 	reports, err := s.managed(ctx, c)
 	if err != nil {
-		return Item{}, policy.ErrNotFound
+		return Item{}, policy.Relation{}, policy.ErrNotFound
 	}
 	if !slices.ContainsFunc(item.Owners, func(owner string) bool { return slices.Contains(reports, owner) }) {
-		return Item{}, policy.ErrNotFound
+		return Item{}, policy.Relation{}, policy.ErrNotFound
 	}
-	return item, nil
+	return item, policy.Relation{}, nil
 }
 
 // managed returns whose owned items the tenant's setting lets the caller read.
