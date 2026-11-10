@@ -1,0 +1,57 @@
+/* The frame of a page drawn on the server, in the web kit's tokens and class names, so
+   it matches every React app's rail. The page defines the tokens (--bg, --panel,
+   --surface, --line, --text, --muted, --accent, --accent-soft, --hover, --shadow) for
+   light and dark, and sets data-theme on <html> from the person's saved theme. */
+.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.shell { display: flex; min-height: 100vh; }
+.sidebar { width: 248px; flex: none; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 0.75rem; padding: 0.7rem; height: 100vh; position: sticky; top: 0; overflow-y: auto; }
+.sidebar .brand { margin: 0; justify-content: flex-start; }
+.brand { display: flex; align-items: center; gap: 0.55rem; padding: 0.15rem 0.15rem 0.2rem; font-weight: 650; font-size: 0.98rem; color: var(--text); text-decoration: none; letter-spacing: -0.01em; }
+.brand img { width: 30px; height: 24px; object-fit: contain; }
+.nav-links { display: flex; flex-direction: column; gap: 1px; }
+.nav-link { display: flex; align-items: center; gap: 0.55rem; padding: 0.38rem 0.55rem; border-radius: 8px; color: var(--text); text-decoration: none; font-size: 0.92rem; font-weight: 500; }
+.nav-link:hover { background: var(--hover, var(--sunken)); }
+.nav-link[aria-current] { background: var(--accent-soft); color: var(--accent); }
+.nav-group { margin: 0.7rem 0.55rem 0.15rem; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.nav-group:first-child { margin-top: 0; }
+.frame-apps { border-top: 1px solid var(--line); padding-top: 0.6rem; }
+.frame-apps .nav-group { margin-top: 0; }
+.sidebar-foot { margin-top: auto; border-top: 1px solid var(--line); padding-top: 0.5rem; }
+.content { flex: 1; min-width: 0; }
+
+/* The account menu: a disclosure, so it works without a script. */
+.frame-account { position: relative; margin: 0; }
+.frame-account > summary { list-style: none; display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.45rem; border-radius: 10px; cursor: pointer; color: var(--text); }
+.frame-account > summary::-webkit-details-marker { display: none; }
+.frame-account > summary:hover, .frame-account[open] > summary { background: var(--hover, var(--sunken)); }
+.frame-avatar { width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); font-weight: 650; font-size: 0.9rem; }
+.frame-who { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+.frame-who b, .frame-who small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frame-who b { font-weight: 600; font-size: 0.9rem; }
+.frame-who small { color: var(--muted); font-size: 0.78rem; }
+.frame-menu { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 236px; z-index: 20; display: flex; flex-direction: column; gap: 0.3rem; padding: 0.55rem; background: var(--surface, var(--panel)); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.frame-label { color: var(--muted); font-size: 0.75rem; padding: 0.1rem 0.25rem 0; }
+.frame-seg { display: flex; gap: 2px; padding: 2px; margin: 0; background: var(--sunken); border-radius: 9px; }
+.frame-seg button { flex: 1; width: auto; min-height: 0; margin: 0; padding: 0.3rem 0.4rem; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 550; cursor: pointer; box-shadow: none; filter: none; }
+.frame-seg button:hover { color: var(--text); background: none; filter: none; }
+.frame-seg button[aria-pressed="true"] { background: var(--surface, var(--panel)); color: var(--text); box-shadow: var(--shadow-sm, 0 1px 2px rgb(15 23 42 / 0.08)); }
+.frame-menu hr { width: 100%; border: 0; border-top: 1px solid var(--line); margin: 0.25rem 0; }
+.frame-menu form { margin: 0; }
+.frame-item { display: flex; align-items: center; justify-content: flex-start; gap: 0.55rem; width: 100%; min-height: 0; margin: 0; padding: 0.42rem 0.45rem; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; font-size: 0.9rem; font-weight: 500; text-align: left; text-decoration: none; cursor: pointer; box-shadow: none; filter: none; }
+.frame-item:hover { background: var(--hover, var(--sunken)); filter: none; }
+.frame-back { display: inline-flex; align-items: center; gap: 0.2rem; color: var(--muted); text-decoration: none; font-size: 0.87rem; width: fit-content; }
+.frame-back:hover { color: var(--text); }
+
+/* With no script for a drawer, the rail becomes a bar across the top on a phone. */
+@media (max-width: 720px) {
+	.shell { flex-direction: column; }
+	.sidebar { width: auto; height: auto; position: static; flex-direction: row; align-items: center; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); gap: 0.25rem 0.5rem; overflow: visible; }
+	.brand { flex: 1; }
+	.nav-links { order: 3; flex-basis: 100%; flex-direction: row; overflow-x: auto; }
+	.nav-link { white-space: nowrap; }
+	.nav-group { display: none; }
+	.frame-apps { order: 4; border-top: 0; padding-top: 0; }
+	.sidebar-foot { margin: 0; border-top: 0; padding-top: 0; }
+	.frame-who { display: none; }
+	.frame-menu { bottom: auto; top: calc(100% + 6px); left: auto; right: 0; }
+}

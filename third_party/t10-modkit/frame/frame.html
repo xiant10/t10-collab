@@ -1,0 +1,28 @@
+{{define "frame-icon"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">{{if eq . "workbench"}}<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>{{else if eq . "console"}}<path d="M12 17v4"/><path d="m14.305 7.53.923-.382"/><path d="m15.228 4.852-.923-.383"/><path d="m16.852 3.228-.383-.924"/><path d="m16.852 8.772-.383.923"/><path d="m19.148 3.228.383-.924"/><path d="m19.53 9.696-.382-.924"/><path d="m20.772 4.852.924-.383"/><path d="m20.772 7.148.924.383"/><path d="M22 13v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7"/><path d="M8 21h8"/><circle cx="18" cy="6" r="3"/>{{else if eq . "sessions"}}<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>{{else if eq . "user"}}<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>{{else if eq . "signout"}}<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>{{else if eq . "updown"}}<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>{{else if eq . "back"}}<path d="m15 18-6-6 6-6"/>{{else}}<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/>{{end}}</svg>{{end}}
+
+{{define "frame-apps"}}{{if .}}<div class="nav-links frame-apps" data-testid="rail-apps">
+<span class="nav-group">{{t "Apps"}}</span>
+{{range .}}<a class="nav-link" href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{template "frame-icon" .Icon}}<span>{{if eq .Icon "workbench"}}{{if eq .Label "Workbench"}}{{t "Workbench"}}{{else}}{{.Label}}{{end}}{{else if eq .Icon "console"}}{{t "Platform console"}}{{else}}{{.Label}}{{end}}</span></a>
+{{end}}</div>{{end}}{{end}}
+
+{{define "frame-account"}}<details class="frame-account">
+<summary><span class="frame-avatar" aria-hidden="true">{{.Initial}}</span><span class="frame-who"><b>{{.Name}}</b>{{with .Detail}}<small>{{.}}</small>{{end}}</span>{{template "frame-icon" "updown"}}</summary>
+<div class="frame-menu" role="group" aria-label="{{t "Account"}}">
+<span class="frame-label">{{t "Language"}}</span>
+<form class="frame-seg" method="post" action="{{.LanguageAction}}">
+<input type="hidden" name="next" value="{{.Here}}">
+<button name="lang" value="en" lang="en" aria-pressed="{{eq .Lang "en"}}">English</button>
+<button name="lang" value="zh-Hans" lang="zh-Hans" aria-pressed="{{eq .Lang "zh-Hans"}}">简体中文</button>
+</form>
+<span class="frame-label">{{t "Theme"}}</span>
+<form class="frame-seg" method="post" action="{{.ThemeAction}}">
+<input type="hidden" name="next" value="{{.Here}}">
+<button name="theme" value="system" aria-pressed="{{or (eq .Theme "system") (eq .Theme "")}}">{{t "System"}}</button>
+<button name="theme" value="light" aria-pressed="{{eq .Theme "light"}}">{{t "Light"}}</button>
+<button name="theme" value="dark" aria-pressed="{{eq .Theme "dark"}}">{{t "Dark"}}</button>
+</form>
+<hr>
+{{with .AccountURL}}<a class="frame-item" href="{{.}}">{{template "frame-icon" "user"}}{{t "Account"}}</a>
+{{end}}<form method="post" action="{{.SignOutAction}}"><button class="frame-item">{{template "frame-icon" "signout"}}{{t "Sign out"}}</button></form>
+</div>
+</details>{{end}}
