@@ -57,6 +57,8 @@ Users see the word "task". Code, schema, API routes and tool names say **work it
 - Nothing here stores a task ID, session ID or conversation ID.
 - If an assistant later acts on a work item, it's an ordinary API caller with a delegated token. Finishing an agent task never changes a work item by itself.
 
+**Agent teammates (proposed).** A tenant agent account, a membership of kind `agent`, can be a recipient, owner, collaborator and list member, under the access rules below, so "a person" in them reads as "a member". The rules above still hold: an item isn't an agent task, and nothing here stores a session. Only an agent account acting on its own items may send, accept, decline or claim through `/mcp`; an assistant acting for a person still only reads and drafts. Each send checks the teammate's `accepts_from`, an agent account sends at most 60 an hour and never to itself, and an item sent from agent to agent 3 times with no person acting goes to the last teammate's manager. Events for `t10-automations` (`work.offered`, `work.assigned`, `list.item_added`, `work.commented`, `work.accepted`, `work.declined`, `work.returned`) leave from an outbox, each with the grant that caused it and its agent hop count, and a mention in a comment notifies a member who can already see the item. See [`t10-agent-control/docs/tenant-agents.md`](../../t10-agent-control/docs/tenant-agents.md), Part 2.
+
 ## Goals and non-goals
 
 **Goals**
@@ -396,7 +398,7 @@ Phase 5 also added `t10-collab` to the `runtimes` audiences in `clients.yaml`, a
 - [ ] **Can one send go to several people?** V1 has one recipient. An item can already have several pending `share` offers, so a later version could send one to each person on a single item, with no copies.
 - [ ] **How long are closed items, soft deletes and history kept?** This depends on customer contracts, like the auth audit log.
 - [x] **How much should an assistant be able to do?** It can read and draft, and only a person can send, accept or delete. No tool exists for those, and no runtime lists `work:send` or `work:delete`.
-- [ ] **Agent teammates, proposed.** A tenant agent account is a member, so it could receive, own and send items like a person: a peer's send is an offer it accepts or declines by its instructions, its manager's send is an assignment, and it can claim from lists it's on. The assistant rule above still holds, because send, accept, decline and claim tools would be allowed only when the token's principal is an agent account acting on its own items. It adds `accepts_from` checked on each send, a limit on items passed from agent to agent with no person acting, a send rate for agent accounts, and events posted to `t10-automations`. Decision 1 keeps its point, since work items still aren't agent tasks. See [`t10-agent-control/docs/tenant-agents.md`](../../t10-agent-control/docs/tenant-agents.md), Part 2.
+- [ ] **Agent teammates, proposed.** Agent accounts as members on items and lists, `accepts_from`, the agent-to-agent limit and send rate, and events for `t10-automations` with their cause, as "Agent teammates" under "Not the agent task" describes. Step T2 of [`t10-agent-control/docs/tenant-agents.md`](../../t10-agent-control/docs/tenant-agents.md).
 
 ## Rollout
 
