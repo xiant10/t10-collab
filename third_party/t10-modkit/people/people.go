@@ -67,7 +67,23 @@ type Member struct {
 	ManagerUserID string `json:"manager_user_id"`
 	OrgUnitID     string `json:"org_unit_id"`
 	DisplayName   string `json:"display_name"`
+	// Kind is person or agent. An agent account, such as an agent teammate, is a
+	// member like anyone, with no sign-in, and is nobody's manager.
+	Kind string `json:"kind"`
 }
+
+// KindAgent marks a tenant agent account.
+const KindAgent = "agent"
+
+// AgentPrefix starts every agent account's ID, as the auth service issues
+// them, so a module can tell one from a person's without a read.
+const AgentPrefix = "acc_"
+
+// IsAgentID reports whether a user ID is an agent account's.
+func IsAgentID(id string) bool { return strings.HasPrefix(id, AgentPrefix) }
+
+// Agent reports whether the member is an agent account.
+func (m Member) Agent() bool { return m.Kind == KindAgent }
 
 // Active reports whether the membership and the account are both active.
 func (m Member) Active() bool { return m.Status == active && m.UserStatus == active }
@@ -115,6 +131,10 @@ func New(opts Options) *Client {
 	}
 	return &Client{opts: opts, client: client, cache: map[string]cachedReports{}}
 }
+
+// ServiceToken is this service's own token, renewed before it expires, for a
+// call it makes as itself, such as posting events.
+func (c *Client) ServiceToken(ctx context.Context) (string, error) { return c.ownToken(ctx) }
 
 func (c *Client) ownToken(ctx context.Context) (string, error) {
 	c.mu.Lock()

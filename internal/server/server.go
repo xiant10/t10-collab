@@ -42,6 +42,9 @@ const (
 // and fields can only be added within an api_version.
 var manifest = map[string]any{
 	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention"},
+	// trigger_events are the kinds this posts to t10-automations, each about one
+	// agent account, which an automation can fire on.
+	"trigger_events": []string{"work.offered", "work.assigned", "work.accepted", "work.declined", "work.commented", "list.item_added"},
 }
 
 // Verifier checks a bearer token.
@@ -126,6 +129,8 @@ func (s *Server) routes() []route {
 		{"POST", "/v1/admin/departures/{item}/reassign", policy.ActionWrite, s.handleReassign},
 		{"GET", "/v1/admin/departures/lists", policy.ActionRead, s.handleListQueue},
 		{"POST", "/v1/admin/departures/lists/{id}/owner", policy.ActionWrite, s.handleSetListOwner},
+		{"GET", "/v1/admin/agents/{user}/intake", policy.ActionRead, s.handleGetIntake},
+		{"PUT", "/v1/admin/agents/{user}/intake", policy.ActionWrite, s.handlePutIntake},
 	}
 }
 
@@ -307,6 +312,8 @@ func classify(err error) (status int, code, message string) {
 		{offers.ErrNotPending, http.StatusConflict, "offer_not_pending"},
 		{offers.ErrRefReused, http.StatusConflict, "client_ref_reused"},
 		{offers.ErrRateLimited, http.StatusTooManyRequests, "rate_limited"},
+		{offers.ErrNotAccepting, http.StatusForbidden, "not_accepting"},
+		{offers.ErrNoManager, http.StatusConflict, "agent_loop"},
 		{people.ErrUnavailable, http.StatusServiceUnavailable, "org_unavailable"},
 		{people.ErrNotFound, http.StatusNotFound, "not_found"},
 	} {
@@ -482,12 +489,13 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request, c po
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request, c policy.Caller) {
 	var req struct {
-		Body string `json:"body"`
+		Body     string   `json:"body"`
+		Mentions []string `json:"mentions"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	comment, err := s.Items.AddComment(r.Context(), c, r.PathValue("id"), req.Body)
+	comment, err := s.Items.AddComment(r.Context(), c, r.PathValue("id"), req.Body, req.Mentions)
 	if err != nil {
 		failure(w, r, err)
 		return
@@ -745,10 +753,12 @@ type person struct {
 	UserID      string `json:"user_id"`
 	DisplayName string `json:"display_name"`
 	OrgUnitID   string `json:"org_unit_id,omitempty"`
+	// Agent marks an agent teammate, so pickers can say so.
+	Agent bool `json:"agent,omitempty"`
 }
 
 func personOf(m people.Member) person {
-	return person{UserID: m.UserID, DisplayName: m.DisplayName, OrgUnitID: m.OrgUnitID}
+	return person{UserID: m.UserID, DisplayName: m.DisplayName, OrgUnitID: m.OrgUnitID, Agent: m.Agent() || people.IsAgentID(m.UserID)}
 }
 
 func (s *Server) handleUnits(w http.ResponseWriter, r *http.Request, c policy.Caller) {
@@ -785,4 +795,35 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request, c policy
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetIntake and handlePutIntake are who may offer work to an agent
+// account, such as an agent teammate. Only a module admin sets it.
+func (s *Server) handleGetIntake(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	if !s.admin(w, r, c) {
+		return
+	}
+	in, err := s.Offers.GetIntake(r.Context(), c, r.PathValue("user"))
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, in)
+}
+
+func (s *Server) handlePutIntake(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var in offers.Intake
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if !s.admin(w, r, c) {
+		return
+	}
+	in.UserID = r.PathValue("user")
+	out, err := s.Offers.SetIntake(r.Context(), c, in)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

@@ -49,6 +49,8 @@ const (
 	maxTitle       = 300
 	maxDescription = 20000
 	maxComment     = 10000
+	// maxMentions is the most people one comment can mention.
+	maxMentions = 20
 )
 
 var (
@@ -202,7 +204,21 @@ func (s *Service) Create(ctx context.Context, c policy.Caller, n NewItem, after 
 				return fmt.Errorf("insert owner: %w", err)
 			}
 		}
-		if err := activity.Record(ctx, tx, c, activity.Change{ItemID: id, Kind: "item.created"}); err != nil {
+		// An agent account on the item's list is told, so it can claim the item
+		// as any member may. People see new list items on the list itself.
+		var notify []string
+		if n.ListID != "" {
+			rows, err := tx.Query(ctx,
+				`SELECT user_id FROM collab.list_members WHERE tenant_id = $1 AND list_id = $2 AND user_id LIKE 'acc\_%'`,
+				c.TenantID, n.ListID)
+			if err != nil {
+				return fmt.Errorf("read list agents: %w", err)
+			}
+			if notify, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+				return fmt.Errorf("read list agents: %w", err)
+			}
+		}
+		if err := activity.Record(ctx, tx, c, activity.Change{ItemID: id, Kind: "item.created", Notify: notify}); err != nil {
 			return err
 		}
 		if after != nil {
@@ -942,16 +958,17 @@ type Comment struct {
 }
 
 // AddComment posts a comment on an item the caller can read.
-func (s *Service) AddComment(ctx context.Context, c policy.Caller, id, body string) (Comment, error) {
-	if strings.TrimSpace(body) == "" || utf8.RuneCountInString(body) > maxComment {
+func (s *Service) AddComment(ctx context.Context, c policy.Caller, id, body string, mentions []string) (Comment, error) {
+	if strings.TrimSpace(body) == "" || utf8.RuneCountInString(body) > maxComment || len(mentions) > maxMentions {
 		return Comment{}, ErrInvalid
 	}
 	comment := Comment{ID: ids.New("cmt"), AuthorID: c.UserID, Body: body}
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, _, err := Lock(ctx, tx, c, id); err != nil {
+		item, _, err := Lock(ctx, tx, c, id)
+		if err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx,
+		err = tx.QueryRow(ctx,
 			"INSERT INTO collab.comments (tenant_id, id, item_id, author_id, body) VALUES ($1, $2, $3, $4, $5) RETURNING created_at",
 			c.TenantID, comment.ID, id, c.UserID, body).Scan(&comment.CreatedAt)
 		if err != nil {
@@ -961,8 +978,24 @@ func (s *Service) AddComment(ctx context.Context, c policy.Caller, id, body stri
 		if err != nil {
 			return err
 		}
+		// A mention tells someone who can already read the item, such as a list
+		// member who isn't on it. It never gives access: anyone else is left out.
+		detail := map[string]any{"comment_id": comment.ID}
+		var mentioned []string
+		for _, userID := range mentions {
+			relation, err := policy.RelationTo(ctx, tx, policy.Caller{TenantID: c.TenantID, UserID: userID}, id, item.CreatorID, item.ListID)
+			if err != nil {
+				return err
+			}
+			if relation.CanRead() && !slices.Contains(mentioned, userID) {
+				mentioned = append(mentioned, userID)
+			}
+		}
+		if len(mentioned) > 0 {
+			detail["mentions"] = mentioned
+		}
 		return activity.Record(ctx, tx, c, activity.Change{
-			ItemID: id, Kind: "comment.added", Detail: map[string]any{"comment_id": comment.ID}, Notify: notify,
+			ItemID: id, Kind: "comment.added", Detail: detail, Notify: append(notify, mentioned...),
 		})
 	})
 	if err != nil {

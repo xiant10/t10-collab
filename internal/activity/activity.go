@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xiant10/t10-modkit/ids"
 	"github.com/xiant10/t10-modkit/page"
+	"github.com/xiant10/t10-modkit/people"
 
 	"t10-collab/internal/policy"
 )
@@ -45,6 +46,7 @@ func Record(ctx context.Context, tx pgx.Tx, c policy.Caller, ch Change) error {
 	}
 	notify := slices.Clone(ch.Notify)
 	slices.Sort(notify)
+	hops := -1
 	for _, userID := range slices.Compact(notify) {
 		if userID == c.UserID || userID == policy.System {
 			continue
@@ -55,8 +57,63 @@ func Record(ctx context.Context, tx pgx.Tx, c policy.Caller, ch Change) error {
 		if err != nil {
 			return fmt.Errorf("write notification: %w", err)
 		}
+		kind, ok := AgentEvents[ch.Kind]
+		if !ok || !people.IsAgentID(userID) {
+			continue
+		}
+		if hops < 0 && ch.ItemID != "" {
+			sends, comments, err := AgentHops(ctx, tx, c.TenantID, ch.ItemID)
+			if err != nil {
+				return err
+			}
+			// Two agents answering each other's comments loop as surely as
+			// two passing an item, so either count stops the firing.
+			hops = max(sends, comments)
+		}
+		_, err = tx.Exec(ctx,
+			`INSERT INTO collab.outbox (tenant_id, id, event_id, kind, item_id, for_user_id, actor_user_id, cause_grant_id, hops)
+			 VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, NULLIF($8, ''), $9)`,
+			c.TenantID, ids.New("obx"), eventID, kind, ch.ItemID, userID, c.UserID, c.GrantID, max(hops, 0))
+		if err != nil {
+			return fmt.Errorf("write outbox: %w", err)
+		}
 	}
 	return nil
+}
+
+// AgentEvents maps a change an agent account is told about to the event kind
+// t10-automations fires its automations on. Changes not here reach an agent
+// account's notifications only.
+var AgentEvents = map[string]string{
+	"offer.sent":      "work.offered",
+	"offer.assigned":  "work.assigned",
+	"item.reassigned": "work.assigned",
+	"offer.accepted":  "work.accepted",
+	"offer.declined":  "work.declined",
+	"comment.added":   "work.commented",
+	"item.created":    "list.item_added",
+}
+
+// AgentHops counts the sends and the comments agent accounts made on an item
+// since a person last acted on it. The sweep is nobody, so it neither counts
+// nor resets.
+func AgentHops(ctx context.Context, q interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}, tenantID, itemID string) (sends, comments int, err error) {
+	err = q.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE e.kind IN ('offer.sent', 'offer.assigned')),
+		        count(*) FILTER (WHERE e.kind = 'comment.added')
+		 FROM collab.events e
+		 WHERE e.tenant_id = $1 AND e.item_id = $2 AND e.kind IN ('offer.sent', 'offer.assigned', 'comment.added')
+		   AND e.actor_user_id LIKE 'acc\_%'
+		   AND e.seq > COALESCE((SELECT max(p.seq) FROM collab.events p
+		                         WHERE p.tenant_id = $1 AND p.item_id = $2
+		                           AND p.actor_user_id NOT LIKE 'acc\_%' AND p.actor_user_id <> $3), 0)`,
+		tenantID, itemID, policy.System).Scan(&sends, &comments)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count agent hops: %w", err)
+	}
+	return sends, comments, nil
 }
 
 func withDefault(detail map[string]any) map[string]any {

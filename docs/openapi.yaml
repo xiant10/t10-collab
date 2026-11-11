@@ -442,6 +442,7 @@ paths:
                       properties:
                         user_id: {type: string}
                         display_name: {type: string, description: Unverified. Can be empty}
+                        agent: {type: boolean, description: An agent teammate. Left out for a person}
                         org_unit_id: {type: string}
                   next_cursor: {type: string}
         default: {$ref: "#/components/responses/Error"}
@@ -528,6 +529,28 @@ paths:
             schema: {$ref: "#/components/schemas/Settings"}
       responses:
         "200": {$ref: "#/components/responses/Settings"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/admin/agents/{user}/intake:
+    parameters:
+      - {name: user, in: path, required: true, schema: {type: string}, description: An agent account's user ID, which starts with acc_}
+    get:
+      summary: Who may offer work to an agent account, for a tenant admin
+      description: An agent account's reporting line can always assign it work. With nothing set, nobody else can offer it any. A user who isn't an agent account answers 404.
+      operationId: getAgentIntake
+      responses:
+        "200": {$ref: "#/components/responses/Intake"}
+        default: {$ref: "#/components/responses/Error"}
+    put:
+      summary: Replace who may offer work to an agent account, for a tenant admin
+      description: A unit takes work from members of the units beneath it too, and a list from its members. Each list must exist. Sends to the account that nobody here allows answer 403 not_accepting.
+      operationId: putAgentIntake
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Intake"}
+      responses:
+        "200": {$ref: "#/components/responses/Intake"}
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/departures:
     get:
@@ -623,6 +646,11 @@ components:
       content:
         application/json:
           schema: {$ref: "#/components/schemas/List"}
+    Intake:
+      description: Who may offer work to an agent account
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Intake"}
     Settings:
       description: The settings
       content:
@@ -644,6 +672,13 @@ components:
               error: {$ref: "#/components/schemas/ErrorCode"}
               message: {type: string}
   schemas:
+    Intake:
+      type: object
+      properties:
+        user_id: {type: string, readOnly: true}
+        everyone: {type: boolean, description: Anyone in the tenant may offer it work}
+        units: {type: array, maxItems: 50, items: {type: string}, description: Members of these org units and the units beneath them}
+        lists: {type: array, maxItems: 50, items: {type: string}, description: Members of these shared lists}
     Status: {type: string, enum: [todo, doing, done, cancelled]}
     Priority: {type: string, enum: [low, normal, high]}
     NewItem:
@@ -767,6 +802,7 @@ components:
     ErrorCode:
       type: string
       enum:
+        - agent_loop
         - already_owned
         - already_owner
         - client_ref_reused
@@ -781,6 +817,7 @@ components:
         - last_owner
         - list_archived
         - managed_by_unit
+        - not_accepting
         - not_found
         - offer_exists
         - offer_not_pending
