@@ -19,18 +19,22 @@ type Config struct {
 	ClientSecret string
 	// OTLPEndpoint is an OTLP/HTTP URL, such as http://collector:4318. Empty turns telemetry off.
 	OTLPEndpoint string
+	// AutomationsURL is t10-automations, which events about agent accounts go
+	// to. Empty means none runs, and the outbox is dropped as it's written.
+	AutomationsURL string
 }
 
 // Load reads and validates the configuration through getenv.
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		ListenAddr:   getenv("COLLAB_LISTEN_ADDR"),
-		DatabaseURL:  getenv("DATABASE_URL"),
-		AuthIssuer:   strings.TrimRight(getenv("AUTH_ISSUER"), "/"),
-		AuthURL:      strings.TrimRight(getenv("AUTH_URL"), "/"),
-		ClientID:     getenv("AUTH_CLIENT_ID"),
-		ClientSecret: getenv("AUTH_CLIENT_SECRET"),
-		OTLPEndpoint: getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		ListenAddr:     getenv("COLLAB_LISTEN_ADDR"),
+		DatabaseURL:    getenv("DATABASE_URL"),
+		AuthIssuer:     strings.TrimRight(getenv("AUTH_ISSUER"), "/"),
+		AuthURL:        strings.TrimRight(getenv("AUTH_URL"), "/"),
+		ClientID:       getenv("AUTH_CLIENT_ID"),
+		ClientSecret:   getenv("AUTH_CLIENT_SECRET"),
+		OTLPEndpoint:   getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		AutomationsURL: strings.TrimRight(getenv("AUTOMATIONS_URL"), "/"),
 	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8082"

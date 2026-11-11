@@ -36,11 +36,15 @@ var mcpVersions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 var errBadArguments = errors.New("the arguments don't fit this tool")
 
 // tool is one agent tool. It calls the same services as the routes, so policy
-// applies to it the same way. There are no work_send or work_delete tools: an
-// agent reads and drafts, and only a person sends, accepts or deletes.
+// applies to it the same way. An assistant acting for a person reads and
+// drafts, and only the person sends, accepts or deletes. The tools marked
+// agentOnly, which send, accept, decline and claim, serve only an agent
+// teammate: a run whose principal is a tenant agent account, acting on its
+// own items under its own rights. There's no work_delete tool.
 type tool struct {
 	name, description string
 	action            string
+	agentOnly         bool
 	schema            map[string]any
 	run               func(ctx context.Context, c policy.Caller, args json.RawMessage) (any, error)
 }
@@ -264,17 +268,96 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_comment",
-			description: "Add a comment to a work item. Everyone on the item is told, and it shows as the user's.",
+			description: "Add a comment to a work item. Everyone on the item is told, and it shows as the user's. Mention people by user ID to tell them too, if they can read the item.",
 			action:      policy.ActionWrite,
-			schema:      object([]string{"id", "body"}, map[string]any{"id": text(id), "body": text("The comment")}),
+			schema: object([]string{"id", "body"}, map[string]any{
+				"id": text(id), "body": text("The comment"),
+				"mentions": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20, "description": "User IDs to tell, from work_people"},
+			}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				ID       string   `json:"id"`
+				Body     string   `json:"body"`
+				Mentions []string `json:"mentions"`
+			}) (any, error) {
+				return s.Items.AddComment(ctx, c, a.ID, a.Body, a.Mentions)
+			}),
+		},
+		{
+			name:        "work_send",
+			description: "For agent teammates only. Send one of your work items to a person or another agent: back to whoever sent it, onward, or to your manager when you can't finish it. A send is an offer they accept or decline. Explain why in the note.",
+			action:      policy.ActionSend,
+			agentOnly:   true,
+			schema: object([]string{"id", "to", "note"}, map[string]any{
+				"id": text(id), "to": text("The user ID to send it to, from work_people"),
+				"mode": choice("transfer gives it away, share keeps you an owner too. transfer by default", offers.ModeTransfer, offers.ModeShare),
+				"note": text("Why you're sending it, and what's left to do"),
+			}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				ID   string `json:"id"`
-				Body string `json:"body"`
+				To   string `json:"to"`
+				Mode string `json:"mode"`
+				Note string `json:"note"`
 			}) (any, error) {
-				return s.Items.AddComment(ctx, c, a.ID, a.Body)
+				return s.Offers.Send(ctx, c, a.ID, offers.Send{To: a.To, Mode: a.Mode, Note: a.Note})
+			}),
+		},
+		{
+			name:        "work_accept",
+			description: "For agent teammates only. Accept work offered to you, by its offer ID from work_offers. Accept only work your instructions say you take.",
+			action:      policy.ActionSend,
+			agentOnly:   true,
+			schema:      object([]string{"offer_id"}, map[string]any{"offer_id": text("Offer ID, such as ofr_ab12")}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				OfferID string `json:"offer_id"`
+			}) (any, error) {
+				return s.Offers.Accept(ctx, c, a.OfferID)
+			}),
+		},
+		{
+			name:        "work_decline",
+			description: "For agent teammates only. Decline work offered to you, with a reason the sender sees. Decline anything your instructions don't say you take.",
+			action:      policy.ActionSend,
+			agentOnly:   true,
+			schema: object([]string{"offer_id", "note"}, map[string]any{
+				"offer_id": text("Offer ID, such as ofr_ab12"), "note": text("Why you're declining"),
+			}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				OfferID string `json:"offer_id"`
+				Note    string `json:"note"`
+			}) (any, error) {
+				return s.Offers.Decline(ctx, c, a.OfferID, a.Note)
+			}),
+		},
+		{
+			name:        "work_claim",
+			description: "For agent teammates only. Claim an unowned item on a shared list you're a member of, so it's yours to work on.",
+			action:      policy.ActionWrite,
+			agentOnly:   true,
+			schema:      object([]string{"id"}, map[string]any{"id": text(id)}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				ID string `json:"id"`
+			}) (any, error) {
+				return s.Items.Claim(ctx, c, a.ID)
 			}),
 		},
 	}
+}
+
+// toolsFor are the tools a list shows. A list made with a person's token, or
+// an assistant's, leaves out the agent-only tools. One made without a token is
+// a harness's catalog for every session, which can't know whose a session is,
+// so it has every tool: calls still decide, and refuse the agent-only ones for
+// anyone but an agent account.
+func (s *Server) toolsFor(r *http.Request) []tool {
+	all := s.tools()
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || raw == "" {
+		return all
+	}
+	if who, err := s.Verifier.Verify(r.Context(), raw); err == nil && who.Agent != nil && people.IsAgentID(who.UserID) {
+		return all
+	}
+	return slices.DeleteFunc(all, func(t tool) bool { return t.agentOnly })
 }
 
 func (s *Server) toolPeople(ctx context.Context, c policy.Caller, a struct {
@@ -374,7 +457,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		rpcResult(w, message.ID, map[string]any{})
 	case "tools/list":
-		tools := s.tools()
+		tools := s.toolsFor(r)
 		listed := make([]map[string]any, len(tools))
 		for i, t := range tools {
 			listed[i] = map[string]any{"name": t.name, "description": t.description, "inputSchema": t.schema}
@@ -428,6 +511,9 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, message rpcMess
 	switch {
 	case !unconstrained(who):
 		rpcResult(w, message.ID, toolFailure("forbidden", "this agent's grant has limits this service can't apply"))
+		return
+	case t.agentOnly && !people.IsAgentID(who.UserID):
+		rpcResult(w, message.ID, toolFailure("forbidden", "an assistant drafts work and the person sends it: create the item and ask them to send it"))
 		return
 	case !who.Allows(t.action):
 		rpcResult(w, message.ID, toolFailure("forbidden", "this agent isn't allowed to do this: it needs "+t.action))

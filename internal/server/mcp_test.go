@@ -149,10 +149,10 @@ func TestMCPHandshakeNeedsNoToken(t *testing.T) {
 			t.Errorf("tool %s doesn't use the module's prefix", names[i])
 		}
 	}
-	for _, refused := range []string{"work_send", "work_delete", "work_accept"} {
-		if slices.Contains(names, refused) {
-			t.Errorf("%s is offered to agents", refused)
-		}
+	// No tool deletes. The agent-teammate tools are in a harness's catalog, and
+	// calls refuse them for anyone else (teammates_test.go).
+	if slices.Contains(names, "work_delete") {
+		t.Error("work_delete is offered to agents")
 	}
 	for _, method := range []string{"GET", "DELETE"} {
 		req, _ := http.NewRequest(method, ts.URL+mcpRoute, nil)

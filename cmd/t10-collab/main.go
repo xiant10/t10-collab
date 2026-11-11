@@ -16,6 +16,7 @@ import (
 	"t10-collab/internal/activity"
 	"t10-collab/internal/config"
 	"t10-collab/internal/db"
+	"t10-collab/internal/events"
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
 	"t10-collab/internal/server"
@@ -73,6 +74,7 @@ func run() error {
 		Offers: offers.NewService(pool, org, items), Lists: lists.NewService(pool, org), Activity: activity.NewService(pool),
 	})
 	go sweep.New(pool, org).Run(ctx)
+	go events.New(pool, cfg.AutomationsURL, org.ServiceToken).Run(ctx)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	errs := make(chan error, 1)

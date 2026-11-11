@@ -48,6 +48,13 @@ const (
 	// sendsPerHour limits how fast one person can fill colleagues' inboxes. It's
 	// counted in Postgres, so that it holds across replicas.
 	sendsPerHour = 100
+	// agentSendsPerHour is the same limit for an agent account, lower because a
+	// run can send without anyone watching.
+	agentSendsPerHour = 60
+	// MaxAgentHops is how many times agent accounts may pass an item on with
+	// no person acting. The send that would pass it is redirected to the
+	// sending agent account's manager instead.
+	MaxAgentHops = 3
 )
 
 var (
@@ -65,12 +72,18 @@ var (
 	ErrRefReused = errors.New("client_ref was used for another send")
 	// ErrRateLimited means the sender has hit the hourly limit.
 	ErrRateLimited = errors.New("too many sends")
+	// ErrNotAccepting means the recipient is an agent account that doesn't take
+	// work from the sender. Its reporting line can still assign it work.
+	ErrNotAccepting = errors.New("this agent doesn't take work from you")
+	// ErrNoManager means an item agents kept passing on has nobody to go to.
+	ErrNoManager = errors.New("agents passed this item on too often, and the sender has no manager to send it to")
 )
 
 // Org is the set of reads a send depends on.
 type Org interface {
 	Member(ctx context.Context, tenantID, userID string) (people.Member, error)
 	Reports(ctx context.Context, tenantID, userID string) ([]string, error)
+	Units(ctx context.Context, tenantID string) ([]people.Unit, error)
 }
 
 // Offer is one send, of any outcome.
@@ -127,6 +140,9 @@ func NewService(pool *pgxpool.Pool, org Org, items *workitems.Service) *Service 
 // send, because a send to the wrong person can't be undone.
 type Plan struct {
 	assign bool
+	// redirectedFrom is the agent account a looping send was meant for, when
+	// it went to the sender's manager instead.
+	redirectedFrom string
 }
 
 // Plan makes the org reads for a send. It runs before any transaction, so no row
@@ -158,7 +174,88 @@ func (s *Service) Plan(ctx context.Context, c policy.Caller, send *Send) (Plan, 
 	if err != nil {
 		return Plan{}, err
 	}
-	return Plan{assign: slices.Contains(reports, send.To)}, nil
+	plan := Plan{assign: slices.Contains(reports, send.To)}
+	if recipient.Agent() && !plan.assign {
+		if err := s.accepts(ctx, c, sender, send.To); err != nil {
+			return Plan{}, err
+		}
+	}
+	return plan, nil
+}
+
+// accepts checks an agent account's intake: who it takes offers from. The org
+// reads are fresh, as every read a send depends on is.
+func (s *Service) accepts(ctx context.Context, c policy.Caller, sender people.Member, to string) error {
+	var everyone bool
+	var units, lists []string
+	err := s.pool.QueryRow(ctx, "SELECT everyone, units, lists FROM collab.agent_intake WHERE tenant_id = $1 AND user_id = $2",
+		c.TenantID, to).Scan(&everyone, &units, &lists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotAccepting
+	}
+	if err != nil {
+		return fmt.Errorf("read intake: %w", err)
+	}
+	if everyone {
+		return nil
+	}
+	if len(lists) > 0 {
+		var member bool
+		err := s.pool.QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM collab.list_members WHERE tenant_id = $1 AND list_id = ANY($2) AND user_id = $3)",
+			c.TenantID, lists, c.UserID).Scan(&member)
+		if err != nil {
+			return fmt.Errorf("read list members: %w", err)
+		}
+		if member {
+			return nil
+		}
+	}
+	if len(units) > 0 && sender.OrgUnitID != "" {
+		tree, err := s.org.Units(ctx, c.TenantID)
+		if err != nil {
+			return err
+		}
+		parent := map[string]string{}
+		for _, u := range tree {
+			parent[u.ID] = u.ParentID
+		}
+		// The sender's unit or any unit above it, so a listed department takes
+		// work from its teams. The bound guards against a malformed tree.
+		for unit, n := sender.OrgUnitID, 0; unit != "" && n <= len(tree); unit, n = parent[unit], n+1 {
+			if slices.Contains(units, unit) {
+				return nil
+			}
+		}
+	}
+	return ErrNotAccepting
+}
+
+// loop redirects a send between agent accounts that would pass an item on
+// MaxAgentHops times with no person acting: it goes to the sending agent
+// account's manager instead, who answers for its work.
+// It returns the agent account the send was meant for when it redirects one.
+func (s *Service) loop(ctx context.Context, c policy.Caller, itemID string, send *Send) (string, error) {
+	if !people.IsAgentID(c.UserID) || !people.IsAgentID(send.To) {
+		return "", nil
+	}
+	hops, _, err := activity.AgentHops(ctx, s.pool, c.TenantID, itemID)
+	if err != nil {
+		return "", err
+	}
+	if hops+1 < MaxAgentHops {
+		return "", nil
+	}
+	sender, err := s.org.Member(ctx, c.TenantID, c.UserID)
+	if err != nil {
+		return "", err
+	}
+	if sender.ManagerUserID == "" {
+		return "", ErrNoManager
+	}
+	meant := send.To
+	send.To = sender.ManagerUserID
+	return meant, nil
 }
 
 // Send sends an existing item.
@@ -185,10 +282,15 @@ func (s *Service) Send(ctx context.Context, c policy.Caller, itemID string, send
 	if item.Closed() {
 		return Offer{}, ErrItemClosed
 	}
+	redirectedFrom, err := s.loop(ctx, c, itemID, &send)
+	if err != nil {
+		return Offer{}, err
+	}
 	plan, err := s.Plan(ctx, c, &send)
 	if err != nil {
 		return Offer{}, err
 	}
+	plan.redirectedFrom = redirectedFrom
 	var offer Offer
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		offer, err = s.SendIn(ctx, tx, c, plan, itemID, send)
@@ -223,7 +325,7 @@ func (s *Service) SendIn(ctx context.Context, tx pgx.Tx, c policy.Caller, plan P
 	if err != nil {
 		return Offer{}, fmt.Errorf("count sends: %w", err)
 	}
-	if sent >= sendsPerHour {
+	if sent >= sendsPerHour || (people.IsAgentID(c.UserID) && sent >= agentSendsPerHour) {
 		return Offer{}, ErrRateLimited
 	}
 
@@ -253,6 +355,9 @@ func (s *Service) SendIn(ctx context.Context, tx pgx.Tx, c policy.Caller, plan P
 	}
 
 	detail := map[string]any{"offer_id": offer.ID, "to": send.To, "mode": send.Mode, "note": send.Note}
+	if plan.redirectedFrom != "" {
+		detail["redirected_from"], detail["reason"] = plan.redirectedFrom, "agent_loop"
+	}
 	if !plan.assign {
 		err := activity.Record(ctx, tx, c, activity.Change{ItemID: itemID, Kind: "offer.sent", Detail: detail, Notify: []string{send.To}})
 		return offer, err
