@@ -76,6 +76,30 @@ func text(description string) map[string]any {
 	return map[string]any{"type": "string", "description": description}
 }
 
+const (
+	dueOverdue = "overdue"
+	dueSoon    = "soon"
+)
+
+// dueFilter narrows f to overdue items, which are still open, or to items due
+// in the next 24 hours.
+func dueFilter(f *workitems.Filter, due string, now time.Time) error {
+	switch due {
+	case "":
+	case dueOverdue:
+		f.DueBefore = &now
+		if f.Status == "" {
+			f.Status = workitems.StatusOpen
+		}
+	case dueSoon:
+		until := now.Add(24 * time.Hour)
+		f.DueFrom, f.DueBefore = &now, &until
+	default:
+		return workitems.ErrInvalid
+	}
+	return nil
+}
+
 func choice(description string, values ...string) map[string]any {
 	return map[string]any{"type": "string", "description": description, "enum": values}
 }
@@ -114,18 +138,24 @@ func (s *Server) tools() []tool {
 				"view":    choice("Which items. Leave out for all the user can see", workitems.ViewOwned, workitems.ViewSent, workitems.ViewCollaborating, workitems.ViewList, workitems.ViewReports),
 				"status":  choice("Only items in this status", workitems.StatusTodo, workitems.StatusDoing, workitems.StatusDone, workitems.StatusCancelled),
 				"list_id": text("The shared list to read, needed with view list"),
+				"due":     choice("Only items past their due date and still open (overdue), or due in the next 24 hours (soon)", dueOverdue, dueSoon),
 			})),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				View   string `json:"view"`
 				Status string `json:"status"`
 				ListID string `json:"list_id"`
+				Due    string `json:"due"`
 				pageArgs
 			}) (any, error) {
 				n, err := pageSize(a.Limit)
 				if err != nil {
 					return nil, err
 				}
-				items, next, err := s.Items.List(ctx, c, workitems.Filter{View: a.View, Status: a.Status, ListID: a.ListID, Cursor: a.Cursor, Limit: n})
+				f := workitems.Filter{View: a.View, Status: a.Status, ListID: a.ListID, Cursor: a.Cursor, Limit: n}
+				if err := dueFilter(&f, a.Due, time.Now()); err != nil {
+					return nil, err
+				}
+				items, next, err := s.Items.List(ctx, c, f)
 				return map[string]any{"items": items, "next_cursor": next}, err
 			}),
 		},
