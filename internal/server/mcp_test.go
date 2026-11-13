@@ -10,8 +10,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"t10-collab/internal/policy"
+	"t10-collab/internal/workitems"
 	"t10-collab/verifier"
 )
 
@@ -354,5 +356,24 @@ func TestMCPPeople(t *testing.T) {
 	}
 	if got := call(t, ts.URL, "agent-read", "work_people", map[string]any{"q": "ada"}); len(got.data["people"].([]any)) != 1 {
 		t.Errorf("search = %+v", got)
+	}
+}
+
+func TestWorkListDueFilter(t *testing.T) {
+	now := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	var f workitems.Filter
+	if err := dueFilter(&f, dueOverdue, now); err != nil || f.DueBefore == nil || !f.DueBefore.Equal(now) || f.DueFrom != nil || f.Status != workitems.StatusOpen {
+		t.Errorf("overdue: %+v %v", f, err)
+	}
+	f = workitems.Filter{Status: workitems.StatusDoing}
+	if err := dueFilter(&f, dueOverdue, now); err != nil || f.Status != workitems.StatusDoing {
+		t.Errorf("a status asked for stays: %q", f.Status)
+	}
+	f = workitems.Filter{}
+	if err := dueFilter(&f, dueSoon, now); err != nil || !f.DueFrom.Equal(now) || !f.DueBefore.Equal(now.Add(24*time.Hour)) {
+		t.Errorf("soon: %+v %v", f, err)
+	}
+	if err := dueFilter(&workitems.Filter{}, "tomorrow", now); err == nil {
+		t.Error("an unknown due is refused")
 	}
 }
