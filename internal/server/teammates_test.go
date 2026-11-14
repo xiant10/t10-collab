@@ -183,6 +183,38 @@ func TestMentionsTellOnlyThoseWhoCanRead(t *testing.T) {
 	}
 }
 
+func TestAMentionByIDReadsAsTheirName(t *testing.T) {
+	h := newHarness(t)
+	ts := h.teammateServer()
+	h.org.mu.Lock()
+	h.org.members[acme+"/usr_mei"] = people.Member{UserID: "usr_mei", DisplayName: "Mei Lin", Status: "active", UserStatus: "active"}
+	h.org.members[acme+"/usr_gone"] = people.Member{UserID: "usr_gone", DisplayName: "Gone", Status: "inactive", UserStatus: "active"}
+	h.org.mu.Unlock()
+	h.want("eve", "PUT", "/v1/admin/agents/acc_lead/intake", map[string]any{"everyone": true}, http.StatusOK)
+	item := h.item("ada")
+	h.want("ada", "PUT", "/v1/work-items/"+item+"/collaborators/usr_mei", nil, http.StatusNoContent)
+	offer := h.want("ada", "POST", "/v1/work-items/"+item+"/send", map[string]any{"to": "acc_lead"}, http.StatusCreated)
+	call(t, ts.URL, "teammate:acc_lead", "work_accept", map[string]any{"offer_id": offer["id"]})
+
+	// The teammate knows Mei only by her ID, and leaves her out of mentions.
+	r := call(t, ts.URL, "teammate:acc_lead", "work_comment", map[string]any{"id": item, "body": "@usr_mei which tier? cc @usr_gone @usr_nobody"})
+	if r.failed {
+		t.Fatalf("comment: %+v", r)
+	}
+	_, page := h.as("ada", "GET", "/v1/work-items/"+item+"/comments", nil)
+	comments := page["comments"].([]any)
+	if body := comments[len(comments)-1].(map[string]any)["body"]; body != "@Mei Lin which tier? cc @usr_gone @usr_nobody" {
+		t.Errorf("body = %q", body)
+	}
+	var mentioned string
+	if err := h.pool.QueryRow(context.Background(), "SELECT coalesce(detail->>'mentions', '') FROM collab.events WHERE item_id = $1 AND kind = 'comment.added' ORDER BY at DESC LIMIT 1", item).Scan(&mentioned); err != nil {
+		t.Fatal(err)
+	}
+	if mentioned != `["usr_mei"]` {
+		t.Errorf("mentions = %s", mentioned)
+	}
+}
+
 func TestTeammatesPassingAnItemStopAtTheirManager(t *testing.T) {
 	h := newHarness(t)
 	ts := h.teammateServer()

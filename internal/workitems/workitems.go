@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -93,6 +94,24 @@ type Item struct {
 	Collaborators []string   `json:"collaborators"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+	// Suggestion is a send an assistant drafted, for an owner to make. Only
+	// owners are shown it.
+	Suggestion *Suggestion `json:"suggestion,omitempty"`
+}
+
+// Suggestion is who an assistant thinks an item should go to, and the note.
+type Suggestion struct {
+	To   string    `json:"to"`
+	Note string    `json:"note"`
+	At   time.Time `json:"at"`
+}
+
+// ForReader leaves out what only an owner may see.
+func (i Item) ForReader(userID string) Item {
+	if !slices.Contains(i.Owners, userID) {
+		i.Suggestion = nil
+	}
+	return i
 }
 
 // Closed reports whether the item is finished, so it can't be sent.
@@ -103,12 +122,18 @@ func closed(status string) bool { return status == StatusDone || status == Statu
 const itemColumns = `i.id, i.title, i.description, i.status, i.priority, i.due_at, i.creator_id, COALESCE(i.list_id, ''), i.version,
 	ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id),
 	ARRAY(SELECT c.user_id FROM collab.work_item_collaborators c WHERE c.tenant_id = i.tenant_id AND c.item_id = i.id ORDER BY c.user_id),
-	i.created_at, i.updated_at`
+	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at`
 
 func scanItem(row pgx.Row) (Item, error) {
 	var i Item
+	var to *string
+	var note string
+	var at *time.Time
 	err := row.Scan(&i.ID, &i.Title, &i.Description, &i.Status, &i.Priority, &i.DueAt, &i.CreatorID, &i.ListID, &i.Version,
-		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt)
+		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at)
+	if to != nil && at != nil {
+		i.Suggestion = &Suggestion{To: *to, Note: note, At: *at}
+	}
 	return i, err
 }
 
@@ -292,7 +317,7 @@ func (s *Service) Read(ctx context.Context, c policy.Caller, id string) (Item, p
 	if err != nil {
 		return Item{}, policy.Relation{}, err
 	}
-	return relate(ctx, s.pool, c, item)
+	return relate(ctx, s.pool, c, item.ForReader(c.UserID))
 }
 
 // View returns an item the caller can read, or one owned by someone they manage
@@ -321,7 +346,7 @@ func (s *Service) ViewAs(ctx context.Context, c policy.Caller, id string) (Item,
 	if !slices.ContainsFunc(item.Owners, func(owner string) bool { return slices.Contains(reports, owner) }) {
 		return Item{}, policy.Relation{}, policy.ErrNotFound
 	}
-	return item, policy.Relation{}, nil
+	return item.ForReader(c.UserID), policy.Relation{}, nil
 }
 
 // managed returns whose owned items the tenant's setting lets the caller read.
@@ -602,7 +627,10 @@ func (s *Service) List(ctx context.Context, c policy.Caller, f Filter) ([]Item, 
 	if err != nil {
 		return nil, "", fmt.Errorf("list items: %w", err)
 	}
-	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) { return scanItem(row) })
+	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) {
+		item, err := scanItem(row)
+		return item.ForReader(c.UserID), err
+	})
 	if err != nil {
 		return nil, "", fmt.Errorf("list items: %w", err)
 	}
@@ -731,7 +759,7 @@ func (s *Service) Update(ctx context.Context, c policy.Caller, id string, p Patc
 	if err != nil {
 		return Item{}, err
 	}
-	return item, nil
+	return item.ForReader(c.UserID), nil
 }
 
 // Delete hides an item from everyone. Its pending offers are withdrawn first, so
@@ -962,6 +990,7 @@ func (s *Service) AddComment(ctx context.Context, c policy.Caller, id, body stri
 	if strings.TrimSpace(body) == "" || utf8.RuneCountInString(body) > maxComment || len(mentions) > maxMentions {
 		return Comment{}, ErrInvalid
 	}
+	body, mentions = s.namedMentions(ctx, c.TenantID, body, mentions)
 	comment := Comment{ID: ids.New("cmt"), AuthorID: c.UserID, Body: body}
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		item, _, err := Lock(ctx, tx, c, id)
@@ -1002,6 +1031,125 @@ func (s *Service) AddComment(ctx context.Context, c policy.Caller, id, body stri
 		return Comment{}, err
 	}
 	return comment, nil
+}
+
+// DismissSuggestion clears a suggested send, for someone who could make it.
+func (s *Service) DismissSuggestion(ctx context.Context, c policy.Caller, id string) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		item, relation, err := Lock(ctx, tx, c, id)
+		if err != nil {
+			return err
+		}
+		if !relation.CanSend() {
+			return policy.ErrForbidden
+		}
+		if item.Suggestion == nil {
+			return nil
+		}
+		if _, err := tx.Exec(ctx,
+			"UPDATE collab.work_items SET suggested_to = NULL, suggested_note = '', suggested_at = NULL WHERE tenant_id = $1 AND id = $2",
+			c.TenantID, id); err != nil {
+			return fmt.Errorf("dismiss suggestion: %w", err)
+		}
+		return activity.Record(ctx, tx, c, activity.Change{ItemID: id, Kind: "item.suggestion_dismissed", Detail: map[string]any{"to": item.Suggestion.To}})
+	})
+}
+
+// Working is an agent account that was told about an item and hasn't acted on
+// it since: it's most likely working on it now.
+type Working struct {
+	UserID string    `json:"user_id"`
+	Since  time.Time `json:"since"`
+}
+
+// workingFor is how long an agent told about an item counts as working on it.
+// A run takes minutes, and one that ends without acting, or never starts, stops
+// showing after this.
+const workingFor = 15 * time.Minute
+
+// Working returns the agent accounts expected to act on the item, its owners and
+// those with an offer waiting, that were told about it since they last acted.
+func (s *Service) Working(ctx context.Context, tenantID string, item Item, offeredTo []string) ([]Working, error) {
+	var expected []string
+	for _, user := range append(slices.Clone(item.Owners), offeredTo...) {
+		if people.IsAgentID(user) && !slices.Contains(expected, user) {
+			expected = append(expected, user)
+		}
+	}
+	if len(expected) == 0 {
+		return []Working{}, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT o.for_user_id, max(o.created_at) FROM collab.outbox o
+		 WHERE o.tenant_id = $1 AND o.item_id = $2 AND o.for_user_id = ANY($3) AND o.created_at > now() - $4::interval
+		   AND o.created_at > COALESCE((SELECT max(e.at) FROM collab.events e
+		       WHERE e.tenant_id = o.tenant_id AND e.item_id = o.item_id AND e.actor_user_id = o.for_user_id), '-infinity')
+		 GROUP BY o.for_user_id ORDER BY o.for_user_id`,
+		tenantID, item.ID, expected, fmt.Sprintf("%d seconds", int(workingFor.Seconds())))
+	if err != nil {
+		return nil, fmt.Errorf("read working agents: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[Working])
+}
+
+// Mention is the latest comment that mentioned someone, which they haven't
+// answered: they've done nothing on the item since.
+type Mention struct {
+	From string    `json:"from"`
+	Body string    `json:"body"`
+	At   time.Time `json:"at"`
+}
+
+// MentionFor returns the caller's unanswered mention on an item, if there is one.
+func (s *Service) MentionFor(ctx context.Context, c policy.Caller, itemID string) (*Mention, error) {
+	var m Mention
+	err := s.pool.QueryRow(ctx,
+		`SELECT e.actor_user_id, cm.body, e.at FROM collab.events e
+		 JOIN collab.comments cm ON cm.tenant_id = e.tenant_id AND cm.id = e.detail->>'comment_id' AND cm.deleted_at IS NULL
+		 WHERE e.tenant_id = $1 AND e.item_id = $2 AND e.kind = 'comment.added' AND e.detail->'mentions' ? $3 AND e.actor_user_id <> $3
+		   AND NOT EXISTS (SELECT 1 FROM collab.events later
+		       WHERE later.tenant_id = e.tenant_id AND later.item_id = e.item_id AND later.actor_user_id = $3 AND later.seq > e.seq)
+		 ORDER BY e.seq DESC LIMIT 1`, c.TenantID, itemID, c.UserID).Scan(&m.From, &m.Body, &m.At)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read mention: %w", err)
+	}
+	return &m, nil
+}
+
+// mentionID is a member's ID written as a mention, as an agent that knows people
+// only by the IDs in an item writes one. auth-server issues usr_ and acc_ IDs.
+var mentionID = regexp.MustCompile(`@((?:usr|acc)_[0-9A-Za-z]+)`)
+
+// namedMentions writes each member's ID mentioned in a comment as their name,
+// which is what people read, and adds them to those mentioned. An ID that isn't
+// an active member of the tenant, or whose read fails, stays as written.
+func (s *Service) namedMentions(ctx context.Context, tenantID, body string, mentions []string) (string, []string) {
+	names := map[string]string{}
+	for _, match := range mentionID.FindAllStringSubmatch(body, -1) {
+		id := match[1]
+		if _, seen := names[id]; seen || len(mentions) >= maxMentions {
+			continue
+		}
+		names[id] = ""
+		member, err := s.org.Member(ctx, tenantID, id)
+		if err != nil || !member.Active() || strings.TrimSpace(member.DisplayName) == "" {
+			continue
+		}
+		names[id] = member.DisplayName
+		if !slices.Contains(mentions, id) {
+			mentions = append(mentions, id)
+		}
+	}
+	body = mentionID.ReplaceAllStringFunc(body, func(mention string) string {
+		if name := names[mention[1:]]; name != "" {
+			return "@" + name
+		}
+		return mention
+	})
+	return body, mentions
 }
 
 // Comments returns one page of an item's comments, oldest first.

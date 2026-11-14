@@ -358,6 +358,12 @@ func (s *Service) SendIn(ctx context.Context, tx pgx.Tx, c policy.Caller, plan P
 	if plan.redirectedFrom != "" {
 		detail["redirected_from"], detail["reason"] = plan.redirectedFrom, "agent_loop"
 	}
+	// A send answers any suggestion, whoever it went to.
+	if _, err := tx.Exec(ctx,
+		`UPDATE collab.work_items SET suggested_to = NULL, suggested_note = '', suggested_at = NULL
+		 WHERE tenant_id = $1 AND id = $2 AND suggested_to IS NOT NULL`, c.TenantID, itemID); err != nil {
+		return Offer{}, fmt.Errorf("clear suggestion: %w", err)
+	}
 	if !plan.assign {
 		err := activity.Record(ctx, tx, c, activity.Change{ItemID: itemID, Kind: "offer.sent", Detail: detail, Notify: []string{send.To}})
 		return offer, err
@@ -370,6 +376,56 @@ func (s *Service) SendIn(ctx context.Context, tx pgx.Tx, c policy.Caller, plan P
 		return Offer{}, err
 	}
 	return offer, activity.Record(ctx, tx, c, activity.Change{ItemID: itemID, Kind: "offer.assigned", Detail: detail, Notify: notify})
+}
+
+// Suggest records a send an assistant drafted, for an owner to make with one
+// click. An assistant acting for a person never sends. It makes the same org
+// checks as a send, so a suggestion that couldn't be sent is refused now, not
+// when the person clicks. Nobody is told: the owner sees it on the item.
+func (s *Service) Suggest(ctx context.Context, c policy.Caller, itemID string, send Send) (workitems.Item, error) {
+	send.Mode = ModeTransfer
+	if _, err := s.Plan(ctx, c, &send); err != nil {
+		return workitems.Item{}, err
+	}
+	var item workitems.Item
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		locked, relation, err := workitems.Lock(ctx, tx, c, itemID)
+		if err != nil {
+			return err
+		}
+		if !relation.CanSend() {
+			return policy.ErrForbidden
+		}
+		if locked.Closed() {
+			return ErrItemClosed
+		}
+		if slices.Contains(locked.Owners, send.To) {
+			return ErrAlreadyOwner
+		}
+		if _, err := tx.Exec(ctx,
+			"UPDATE collab.work_items SET suggested_to = $3, suggested_note = $4, suggested_at = now() WHERE tenant_id = $1 AND id = $2",
+			c.TenantID, itemID, send.To, send.Note); err != nil {
+			return fmt.Errorf("suggest: %w", err)
+		}
+		if err := activity.Record(ctx, tx, c, activity.Change{ItemID: itemID, Kind: "item.suggested", Detail: map[string]any{"to": send.To, "note": send.Note}}); err != nil {
+			return err
+		}
+		item, err = workitems.LockRow(ctx, tx, c.TenantID, itemID)
+		return err
+	})
+	return item, err
+}
+
+// Pending returns the item's offers that nobody has answered, oldest first, for
+// someone who can read it.
+func (s *Service) Pending(ctx context.Context, tenantID, itemID string) ([]Offer, error) {
+	rows, err := s.pool.Query(ctx,
+		"SELECT "+offerColumns+" FROM collab.offers o WHERE o.tenant_id = $1 AND o.item_id = $2 AND o.state = 'pending' ORDER BY o.created_at, o.id",
+		tenantID, itemID)
+	if err != nil {
+		return nil, fmt.Errorf("list pending offers: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (Offer, error) { return scanOffer(row) })
 }
 
 // changeOwners moves ownership as an offer says. The caller holds the item's
