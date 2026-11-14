@@ -287,6 +287,43 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Comment"}
         default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/links:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Add a link
+      description: >-
+        For anyone who may edit the item, at most 20. A link points to where its work happens, such as the pull request an
+        external agent teammate opened. Nothing fetches it. The people on the item are told, as for an edit.
+      operationId: addLink
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: {type: string, maxLength: 2000, description: An https URL with no credentials}
+                title: {type: string, maxLength: 200, description: "Its host and path when left out"}
+                kind: {type: string, enum: [pull_request, commit, build, document, other], description: "Guessed from the URL when left out, such as pull_request for a GitHub /pull/ or GitLab /merge_requests/ path, and other otherwise"}
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Link"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/links/{link}:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+      - {name: link, in: path, required: true, schema: {type: string}}
+    delete:
+      summary: Remove a link
+      operationId: removeLink
+      responses:
+        "204": {description: Removed}
+        default: {$ref: "#/components/responses/Error"}
   /v1/work-items/{id}/send:
     parameters:
       - {$ref: "#/components/parameters/id"}
@@ -803,6 +840,16 @@ components:
             to: {type: string}
             note: {type: string}
             at: {type: string, format: date-time}
+        links: {type: array, items: {$ref: "#/components/schemas/Link"}}
+    Link:
+      type: object
+      properties:
+        id: {type: string}
+        url: {type: string}
+        title: {type: string}
+        kind: {type: string, enum: [pull_request, commit, build, document, other]}
+        added_by: {type: string}
+        created_at: {type: string, format: date-time}
     Offer:
       type: object
       properties:
@@ -852,6 +899,7 @@ components:
         - last_list_owner
         - last_owner
         - list_archived
+        - too_many_links
         - managed_by_unit
         - not_accepting
         - not_found

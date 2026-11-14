@@ -337,6 +337,21 @@ func (s *Server) tools() []tool {
 			}),
 		},
 		{
+			name:        "work_link",
+			description: "Add a link to a work item, such as the pull request, commit or build where you did its work, so people can open it from the task. Use an https URL and a short title; the kind is guessed from the URL when left out. Comment what changed too.",
+			action:      policy.ActionWrite,
+			schema: object([]string{"id", "url"}, map[string]any{
+				"id": text(id), "url": text("The https URL"), "title": text("A short title, such as the pull request's; its address when left out"),
+				"kind": choice("What it points at", workitems.LinkKinds...),
+			}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				ID string `json:"id"`
+				workitems.NewLink
+			}) (any, error) {
+				return s.Items.AddLink(ctx, c, a.ID, a.NewLink)
+			}),
+		},
+		{
 			name:        "work_send",
 			description: "For agent teammates only. Send one of your work items to a person or another agent: back to whoever sent it, onward, or to your manager when you can't finish it. A send is an offer they accept or decline. Explain why in the note.",
 			action:      policy.ActionSend,
