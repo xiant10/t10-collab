@@ -97,6 +97,8 @@ type Item struct {
 	// Suggestion is a send an assistant drafted, for an owner to make. Only
 	// owners are shown it.
 	Suggestion *Suggestion `json:"suggestion,omitempty"`
+	// Links point to where its work happens, such as a pull request.
+	Links []Link `json:"links"`
 }
 
 // Suggestion is who an assistant thinks an item should go to, and the note.
@@ -122,17 +124,21 @@ func closed(status string) bool { return status == StatusDone || status == Statu
 const itemColumns = `i.id, i.title, i.description, i.status, i.priority, i.due_at, i.creator_id, COALESCE(i.list_id, ''), i.version,
 	ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id),
 	ARRAY(SELECT c.user_id FROM collab.work_item_collaborators c WHERE c.tenant_id = i.tenant_id AND c.item_id = i.id ORDER BY c.user_id),
-	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at`
+	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at, ` + linksColumn
 
 func scanItem(row pgx.Row) (Item, error) {
 	var i Item
 	var to *string
 	var note string
 	var at *time.Time
+	var links []byte
 	err := row.Scan(&i.ID, &i.Title, &i.Description, &i.Status, &i.Priority, &i.DueAt, &i.CreatorID, &i.ListID, &i.Version,
-		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at)
+		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at, &links)
 	if to != nil && at != nil {
 		i.Suggestion = &Suggestion{To: *to, Note: note, At: *at}
+	}
+	if err == nil {
+		i.Links, err = scanLinks(links)
 	}
 	return i, err
 }

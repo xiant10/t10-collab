@@ -78,7 +78,7 @@ As built: an agent account is told apart by its ID, which starts with `acc_` as 
 
 - A user-facing client. It's built later, against this API.
 - Sprints, boards, subtasks, dependencies, recurring items, labels and time tracking.
-- File attachments. Documents owns files, and an item can link to one later.
+- File attachments. Documents owns files. An item holds **links** instead: up to 20 `https` URLs, each with a title and a kind (`pull_request`, `commit`, `build`, `document` or `other`), both taken from the URL when left out, added by anyone who may edit it, or by an agent with `work_link`. Nothing fetches them, and adding or removing one is in the item's history (`link.added`, `link.removed`) and tells the people on it. They exist so an external agent teammate can point to the pull request it opened; see t10-agent-control's `docs/external-teammates.md`.
 - Chat. Comments belong to one item.
 - Push notifications, email and SMS.
 - Work shared across tenants.

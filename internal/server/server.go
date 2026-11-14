@@ -103,6 +103,8 @@ func (s *Server) routes() []route {
 		{"DELETE", "/v1/work-items/{id}/collaborators/{user}", policy.ActionWrite, s.handleRemoveCollaborator},
 		{"GET", "/v1/work-items/{id}/comments", policy.ActionRead, s.handleListComments},
 		{"POST", "/v1/work-items/{id}/comments", policy.ActionWrite, s.handleAddComment},
+		{"POST", "/v1/work-items/{id}/links", policy.ActionWrite, s.handleAddLink},
+		{"DELETE", "/v1/work-items/{id}/links/{link}", policy.ActionWrite, s.handleRemoveLink},
 		{"POST", "/v1/work-items/{id}/send", policy.ActionSend, s.handleSend},
 		{"DELETE", "/v1/work-items/{id}/suggestion", policy.ActionWrite, s.handleDismissSuggestion},
 
@@ -302,6 +304,7 @@ func classify(err error) (status int, code, message string) {
 		{workitems.ErrAlreadyOwned, http.StatusConflict, "already_owned"},
 		{workitems.ErrClosed, http.StatusConflict, "item_closed"},
 		{workitems.ErrListArchived, http.StatusConflict, "list_archived"},
+		{workitems.ErrTooManyLinks, http.StatusConflict, "too_many_links"},
 		{lists.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 		{lists.ErrBadPerson, http.StatusUnprocessableEntity, "invalid_recipient"},
 		{lists.ErrBadUnit, http.StatusUnprocessableEntity, "invalid_unit"},
@@ -534,6 +537,27 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request, c poli
 		return
 	}
 	writeJSON(w, http.StatusCreated, comment)
+}
+
+func (s *Server) handleAddLink(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var req workitems.NewLink
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	link, err := s.Items.AddLink(r.Context(), c, r.PathValue("id"), req)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, link)
+}
+
+func (s *Server) handleRemoveLink(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	if err := s.Items.RemoveLink(r.Context(), c, r.PathValue("id"), r.PathValue("link")); err != nil {
+		failure(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request, c policy.Caller) {
