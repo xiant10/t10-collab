@@ -147,6 +147,25 @@ paths:
                           send: {type: boolean}
                           delete: {type: boolean}
                           manage_people: {type: boolean, description: Add and remove collaborators}
+                      pending_offers:
+                        type: array
+                        description: Offers on the item nobody has answered, oldest first
+                        items: {$ref: "#/components/schemas/Offer"}
+                      working:
+                        type: array
+                        description: Agent accounts expected to act on the item, its owners and those offered it, told about it in the last 15 minutes and not acting since
+                        items:
+                          type: object
+                          properties:
+                            user_id: {type: string}
+                            since: {type: string, format: date-time}
+                      mention:
+                        type: object
+                        description: The latest comment that mentioned the caller, if they've done nothing on the item since
+                        properties:
+                          from: {type: string}
+                          body: {type: string}
+                          at: {type: string, format: date-time}
         default: {$ref: "#/components/responses/Error"}
     patch:
       summary: Edit fields or status
@@ -282,6 +301,16 @@ paths:
             schema: {$ref: "#/components/schemas/Send"}
       responses:
         "201": {$ref: "#/components/responses/Offer"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/suggestion:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    delete:
+      summary: Dismiss a suggested send
+      description: For someone who could make the send. An assistant suggests one with the work_suggest tool, or suggest_to on work_create, because only a person sends.
+      operationId: dismissSuggestion
+      responses:
+        "204": {description: Dismissed, or there was none}
         default: {$ref: "#/components/responses/Error"}
   /v1/offers:
     get:
@@ -767,6 +796,13 @@ components:
         collaborators: {type: array, items: {type: string}}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
+        suggestion:
+          type: object
+          description: A send an assistant suggested, for an owner to make. Only owners are shown it, and any send clears it
+          properties:
+            to: {type: string}
+            note: {type: string}
+            at: {type: string, format: date-time}
     Offer:
       type: object
       properties:

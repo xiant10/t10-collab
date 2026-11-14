@@ -104,6 +104,7 @@ func (s *Server) routes() []route {
 		{"GET", "/v1/work-items/{id}/comments", policy.ActionRead, s.handleListComments},
 		{"POST", "/v1/work-items/{id}/comments", policy.ActionWrite, s.handleAddComment},
 		{"POST", "/v1/work-items/{id}/send", policy.ActionSend, s.handleSend},
+		{"DELETE", "/v1/work-items/{id}/suggestion", policy.ActionWrite, s.handleDismissSuggestion},
 
 		{"GET", "/v1/offers", policy.ActionRead, s.handleListOffers},
 		{"POST", "/v1/offers/{id}/accept", policy.ActionSend, s.handleAccept},
@@ -396,10 +397,42 @@ func (s *Server) handleGetItem(w http.ResponseWriter, r *http.Request, c policy.
 		failure(w, r, err)
 		return
 	}
+	// Where the work stands: the offers nobody has answered, and the agents
+	// that were told about it and haven't acted since.
+	pending, err := s.Offers.Pending(r.Context(), c.TenantID, item.ID)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	offeredTo := make([]string, 0, len(pending))
+	for _, offer := range pending {
+		offeredTo = append(offeredTo, offer.ToUserID)
+	}
+	working, err := s.Items.Working(r.Context(), c.TenantID, item, offeredTo)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	mention, err := s.Items.MentionFor(r.Context(), c, item.ID)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		workitems.Item
-		Can policy.Can `json:"can"`
-	}{item, relation.Can(item.Closed())})
+		Can           policy.Can          `json:"can"`
+		PendingOffers []offers.Offer      `json:"pending_offers"`
+		Working       []workitems.Working `json:"working"`
+		Mention       *workitems.Mention  `json:"mention,omitempty"`
+	}{item, relation.Can(item.Closed()), pending, working, mention})
+}
+
+func (s *Server) handleDismissSuggestion(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	if err := s.Items.DismissSuggestion(r.Context(), c, r.PathValue("id")); err != nil {
+		failure(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleUpdateItem(w http.ResponseWriter, r *http.Request, c policy.Caller) {

@@ -253,15 +253,17 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_create",
-			description: "Create a work item owned by the user. It stays with the user: nothing is sent to anyone.",
+			description: "Create a work item owned by the user. It stays with the user: nothing is sent to anyone. If it should go to someone, give suggest_to: the user then sends it with one click from the task or Home, and you tell them it's ready.",
 			action:      policy.ActionWrite,
 			schema: object([]string{"title"}, map[string]any{
-				"title":       text("A short title"),
-				"description": text("The detail"),
-				"priority":    choice("Normal by default", "low", "normal", "high"),
-				"due_at":      text("When it's due, as an RFC 3339 time"),
-				"list_id":     text("Put it on this shared list"),
-				"unowned":     map[string]any{"type": "boolean", "description": "With list_id: leave it for any list member to claim"},
+				"title":        text("A short title"),
+				"description":  text("The detail"),
+				"priority":     choice("Normal by default", "low", "normal", "high"),
+				"due_at":       text("When it's due, as an RFC 3339 time"),
+				"list_id":      text("Put it on this shared list"),
+				"unowned":      map[string]any{"type": "boolean", "description": "With list_id: leave it for any list member to claim"},
+				"suggest_to":   text("The user ID it should go to, from work_people, for the user to confirm"),
+				"suggest_note": text("With suggest_to: the note to send with it"),
 			}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				Title       string     `json:"title"`
@@ -270,10 +272,32 @@ func (s *Server) tools() []tool {
 				DueAt       *time.Time `json:"due_at"`
 				ListID      string     `json:"list_id"`
 				Unowned     bool       `json:"unowned"`
+				SuggestTo   string     `json:"suggest_to"`
+				SuggestNote string     `json:"suggest_note"`
 			}) (any, error) {
-				return s.Items.Create(ctx, c, workitems.NewItem{
+				item, err := s.Items.Create(ctx, c, workitems.NewItem{
 					Title: a.Title, Description: a.Description, Priority: a.Priority, DueAt: a.DueAt, ListID: a.ListID, Unowned: a.Unowned,
 				}, nil)
+				if err != nil || a.SuggestTo == "" {
+					return item, err
+				}
+				return s.suggest(ctx, c, item, offers.Send{To: a.SuggestTo, Note: a.SuggestNote})
+			}),
+		},
+		{
+			name:        "work_suggest",
+			description: "Suggest sending one of the user's work items to someone. You can't send it yourself: the user sends it with one click from the task or Home, so tell them it's ready. A new suggestion replaces the last one.",
+			action:      policy.ActionWrite,
+			schema: object([]string{"id", "to"}, map[string]any{
+				"id": text(id), "to": text("The user ID it should go to, from work_people"),
+				"note": text("The note to send with it: why, and what's left to do"),
+			}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				ID   string `json:"id"`
+				To   string `json:"to"`
+				Note string `json:"note"`
+			}) (any, error) {
+				return s.Offers.Suggest(ctx, c, a.ID, offers.Send{To: a.To, Note: a.Note})
 			}),
 		},
 		{
@@ -298,10 +322,10 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_comment",
-			description: "Add a comment to a work item. Everyone on the item is told, and it shows as the user's. Mention people by user ID to tell them too, if they can read the item.",
+			description: "Add a comment to a work item. Everyone on the item is told, and it shows as the user's. Mention people by user ID to tell them too, if they can read the item. In the body, call people by name, never by ID.",
 			action:      policy.ActionWrite,
 			schema: object([]string{"id", "body"}, map[string]any{
-				"id": text(id), "body": text("The comment"),
+				"id": text(id), "body": text("The comment. Write a mention as @ and the person's name from work_people, such as @Mei Lin. An @ followed by a user ID is shown as their name"),
 				"mentions": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20, "description": "User IDs to tell, from work_people"},
 			}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
@@ -378,6 +402,16 @@ func (s *Server) tools() []tool {
 // a harness's catalog for every session, which can't know whose a session is,
 // so it has every tool: calls still decide, and refuse the agent-only ones for
 // anyone but an agent account.
+// suggest adds a suggested send to an item just created. The item stays if the
+// suggestion is refused, so the model is told why rather than creating it again.
+func (s *Server) suggest(ctx context.Context, c policy.Caller, item workitems.Item, send offers.Send) (any, error) {
+	suggested, err := s.Offers.Suggest(ctx, c, item.ID, send)
+	if err != nil {
+		return map[string]any{"item": item, "suggestion_refused": err.Error()}, nil
+	}
+	return suggested, nil
+}
+
 func (s *Server) toolsFor(r *http.Request) []tool {
 	all := s.tools()
 	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -543,7 +577,7 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, message rpcMess
 		rpcResult(w, message.ID, toolFailure("forbidden", "this agent's grant has limits this service can't apply"))
 		return
 	case t.agentOnly && !people.IsAgentID(who.UserID):
-		rpcResult(w, message.ID, toolFailure("forbidden", "an assistant drafts work and the person sends it: create the item and ask them to send it"))
+		rpcResult(w, message.ID, toolFailure("forbidden", "an assistant drafts work and the person sends it: suggest the send with work_suggest, or suggest_to on work_create, and tell them it's ready to send"))
 		return
 	case !who.Allows(t.action):
 		rpcResult(w, message.ID, toolFailure("forbidden", "this agent isn't allowed to do this: it needs "+t.action))
