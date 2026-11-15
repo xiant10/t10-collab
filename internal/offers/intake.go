@@ -88,3 +88,29 @@ func compact(values []string) []string {
 	}
 	return out
 }
+
+// IntakeList is a shared list an intake can name.
+type IntakeList struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Archived bool   `json:"archived"`
+}
+
+// maxIntakeLists bounds the lists an admin chooses an intake's from.
+const maxIntakeLists = 500
+
+// IntakeLists answers the tenant's shared lists by name, for an admin to choose
+// whose members may offer an agent account work: a team's list, often one the
+// admin isn't on. Only names and IDs, which tell an admin nothing of the items.
+func (s *Service) IntakeLists(ctx context.Context, c policy.Caller) ([]IntakeList, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, name, archived_at IS NOT NULL FROM collab.lists WHERE tenant_id = $1 ORDER BY archived_at IS NOT NULL, lower(name), id LIMIT $2`,
+		c.TenantID, maxIntakeLists)
+	if err != nil {
+		return nil, fmt.Errorf("read lists: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (IntakeList, error) {
+		var l IntakeList
+		return l, row.Scan(&l.ID, &l.Name, &l.Archived)
+	})
+}

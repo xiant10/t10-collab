@@ -17,13 +17,18 @@ import (
 	"t10-collab/verifier"
 )
 
-// teammates is a Verifier that adds agent teammates' tokens, "teammate:<account>",
-// to the agent tokens in mcp_test.go. Their runs hold every work action.
+// teammates is a Verifier that adds agent teammates' tokens,
+// "teammate:<account>", or "teammate:<account>@<grant>" for a run of its own, to
+// the agent tokens in mcp_test.go. Their runs hold every work action.
 type teammates struct{ agents }
 
 func (v teammates) Verify(ctx context.Context, raw string) (*verifier.Identity, error) {
 	if account, ok := strings.CutPrefix(raw, "teammate:"); ok {
 		who := grantOf(policy.ActionRead, policy.ActionWrite, policy.ActionSend)
+		if account, grant, ok := strings.Cut(account, "@"); ok {
+			who.UserID, who.Agent.GrantID = account, grant
+			return who, nil
+		}
 		who.UserID = account
 		return who, nil
 	}
@@ -35,8 +40,8 @@ func (v teammates) Verify(ctx context.Context, raw string) (*verifier.Identity, 
 func (h *harness) teammateServer() *httptest.Server {
 	h.t.Helper()
 	h.org.mu.Lock()
-	h.org.members[acme+"/acc_lead"] = people.Member{UserID: "acc_lead", Status: "active", UserStatus: "active", Kind: people.KindAgent, ManagerUserID: "carol"}
-	h.org.members[acme+"/acc_close"] = people.Member{UserID: "acc_close", Status: "active", UserStatus: "active", Kind: people.KindAgent, ManagerUserID: "dan"}
+	h.org.members[acme+"/acc_lead"] = people.Member{UserID: "acc_lead", DisplayName: "Lead desk", Status: "active", UserStatus: "active", Kind: people.KindAgent, ManagerUserID: "carol"}
+	h.org.members[acme+"/acc_close"] = people.Member{UserID: "acc_close", DisplayName: "Close desk", Status: "active", UserStatus: "active", Kind: people.KindAgent, ManagerUserID: "dan"}
 	h.org.members[acme+"/eve"] = people.Member{UserID: "eve", Status: "active", UserStatus: "active", Role: "admin"}
 	h.org.reports[acme+"/carol"] = append(h.org.reports[acme+"/carol"], "acc_lead")
 	h.org.reports[acme+"/dan"] = []string{"acc_close"}
@@ -129,6 +134,13 @@ func TestWhoMayOfferWorkToATeammate(t *testing.T) {
 	m.OrgUnitID = "org_1"
 	h.org.members[acme+"/ada"] = m
 	h.org.mu.Unlock()
+	// An admin names lists by their names, though not on them; nobody else reads them.
+	team := h.want("ada", "POST", "/v1/lists", map[string]any{"name": "Payments"}, http.StatusCreated)["id"].(string)
+	h.wantError("ada", "GET", "/v1/admin/intake-lists", nil, http.StatusForbidden, "forbidden")
+	named := h.want("eve", "GET", "/v1/admin/intake-lists", nil, http.StatusOK)["lists"].([]any)
+	if len(named) != 1 || named[0].(map[string]any)["id"] != team || named[0].(map[string]any)["name"] != "Payments" {
+		t.Errorf("intake lists: %v", named)
+	}
 	h.want("eve", "PUT", "/v1/admin/agents/acc_lead/intake", map[string]any{"units": []string{"org_1"}}, http.StatusOK)
 	if got := h.want("eve", "GET", "/v1/admin/agents/acc_lead/intake", nil, http.StatusOK); !slices.Equal(strs(got["units"]), []string{"org_1"}) {
 		t.Errorf("intake: %v", got)
@@ -266,8 +278,11 @@ func TestTeammatesAnsweringEachOthersCommentsCountHops(t *testing.T) {
 	h.want("ada", "PUT", "/v1/work-items/"+item+"/collaborators/acc_close", nil, http.StatusNoContent)
 	h.want("ada", "POST", "/v1/work-items/"+item+"/comments", map[string]any{"body": "Thoughts?"}, http.StatusCreated)
 	h.clearOutbox()
+	// Collaborators are woken only by mentions; each comment is a run of its own.
 	for i, from := range []string{"acc_lead", "acc_close", "acc_lead"} {
-		if r := call(t, ts.URL, "teammate:"+from, "work_comment", map[string]any{"id": item, "body": "Over to you"}); r.failed {
+		to := map[string]string{"acc_lead": "acc_close", "acc_close": "acc_lead"}[from]
+		token := "teammate:" + from + "@grt_run" + string(rune('1'+i))
+		if r := call(t, ts.URL, token, "work_comment", map[string]any{"id": item, "body": "@" + to + " over to you"}); r.failed {
 			t.Fatalf("comment %d: %+v", i, r)
 		}
 	}
@@ -283,9 +298,63 @@ func TestTeammatesAnsweringEachOthersCommentsCountHops(t *testing.T) {
 	// A person's comment resets it.
 	h.want("ada", "POST", "/v1/work-items/"+item+"/comments", map[string]any{"body": "Thanks"}, http.StatusCreated)
 	h.clearOutbox()
-	call(t, ts.URL, "teammate:acc_close", "work_comment", map[string]any{"id": item, "body": "Sure"})
+	call(t, ts.URL, "teammate:acc_close", "work_comment", map[string]any{"id": item, "body": "@acc_lead sure"})
 	if got := h.outbox(); len(got) != 1 || got[0].hops != 1 {
 		t.Errorf("after a person commented: %+v", got)
+	}
+}
+
+// A builder hands an item to a reviewer and stays on it as a collaborator. The
+// reviewer's comments, before and after it accepts, and its acceptance don't
+// start the builder's runs, unless a comment mentions it, and one run's several
+// comments are one hop. A send back wakes it, and a decline wakes the sender.
+func TestAnItemsFormerHolderIsToldNotWoken(t *testing.T) {
+	h := newHarness(t)
+	ts := h.teammateServer()
+	for _, account := range []string{"acc_lead", "acc_close"} {
+		h.want("eve", "PUT", "/v1/admin/agents/"+account+"/intake", map[string]any{"everyone": true}, http.StatusOK)
+	}
+	item := h.item("ada")
+	offer := h.want("ada", "POST", "/v1/work-items/"+item+"/send", map[string]any{"to": "acc_lead", "mode": "transfer"}, http.StatusCreated)
+	call(t, ts.URL, "teammate:acc_lead@grt_build", "work_accept", map[string]any{"offer_id": offer["id"]})
+	next := call(t, ts.URL, "teammate:acc_lead@grt_build", "work_send", map[string]any{"id": item, "to": "acc_close", "note": "please review", "mode": "transfer"})
+	if next.failed {
+		t.Fatalf("send: %+v", next)
+	}
+	h.clearOutbox()
+	// A reviewer may comment before it accepts: the builder has offered the item on.
+	call(t, ts.URL, "teammate:acc_close@grt_review", "work_comment", map[string]any{"id": item, "body": "Looking now."})
+	call(t, ts.URL, "teammate:acc_close@grt_review", "work_accept", map[string]any{"offer_id": next.data["id"]})
+	for _, body := range []string{"The limit check is off by one.", "Tests pass otherwise."} {
+		call(t, ts.URL, "teammate:acc_close@grt_review", "work_comment", map[string]any{"id": item, "body": body})
+	}
+	for _, r := range h.outbox() {
+		if r.forUser == "acc_lead" {
+			t.Errorf("the former holder was woken: %+v", r)
+		}
+	}
+	var told int
+	if err := h.pool.QueryRow(context.Background(), "SELECT count(*) FROM collab.notifications WHERE user_id = 'acc_lead'").Scan(&told); err != nil || told == 0 {
+		t.Errorf("the former holder wasn't told: %d %v", told, err)
+	}
+	// A mention wakes it, and the reviewer's run so far is one hop.
+	call(t, ts.URL, "teammate:acc_close@grt_review", "work_comment", map[string]any{"id": item, "body": "@acc_lead can you fix it?"})
+	got := h.outbox()
+	if len(got) != 1 || got[0].forUser != "acc_lead" || got[0].hops != 1 {
+		t.Errorf("mention: %+v", got)
+	}
+
+	// The reviewer sends it back, which wakes the builder, and the builder
+	// declines, which wakes the reviewer, who still owns it.
+	h.clearOutbox()
+	back := call(t, ts.URL, "teammate:acc_close@grt_review", "work_send", map[string]any{"id": item, "to": "acc_lead", "note": "please fix", "mode": "transfer"})
+	if got := h.outbox(); back.failed || len(got) != 1 || got[0].kind != "work.offered" || got[0].forUser != "acc_lead" {
+		t.Fatalf("send back: %+v %+v", back, got)
+	}
+	h.clearOutbox()
+	call(t, ts.URL, "teammate:acc_lead@grt_fix", "work_decline", map[string]any{"offer_id": back.data["id"], "note": "ask a person"})
+	if got := h.outbox(); len(got) != 1 || got[0].kind != "work.declined" || got[0].forUser != "acc_close" {
+		t.Errorf("decline: %+v", got)
 	}
 }
 

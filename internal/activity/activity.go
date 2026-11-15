@@ -61,6 +61,15 @@ func Record(ctx context.Context, tx pgx.Tx, c policy.Caller, ch Change) error {
 		if !ok || !people.IsAgentID(userID) {
 			continue
 		}
+		if ch.ItemID != "" && !mentioned(ch.Detail, userID) {
+			handed, err := handedOn(ctx, tx, c.TenantID, ch.ItemID, userID)
+			if err != nil {
+				return err
+			}
+			if handed {
+				continue
+			}
+		}
 		if hops < 0 && ch.ItemID != "" {
 			sends, comments, err := AgentHops(ctx, tx, c.TenantID, ch.ItemID)
 			if err != nil {
@@ -92,23 +101,59 @@ var AgentEvents = map[string]string{
 	"offer.declined":  "work.declined",
 	"comment.added":   "work.commented",
 	"item.created":    "list.item_added",
+	"workflow.moved":  "work.assigned",
+}
+
+// mentioned says whether a comment's detail mentions userID.
+func mentioned(detail map[string]any, userID string) bool {
+	switch m := detail["mentions"].(type) {
+	case []string:
+		return slices.Contains(m, userID)
+	case []any:
+		return slices.Contains(m, any(userID))
+	}
+	return false
+}
+
+// handedOn says whether an agent account has handed an item on: it has no
+// offer for the item, and is on it only as a collaborator, or owns it but has
+// offered it to someone else to take over. Such an agent is told about the
+// item's changes but not woken by them, unless a comment mentions it, so the
+// next holder's comments, even before they accept, don't start a run of every
+// agent that held the item. A decline ends the offer, so it wakes the sender.
+func handedOn(ctx context.Context, tx pgx.Tx, tenantID, itemID, userID string) (bool, error) {
+	var handed bool
+	err := tx.QueryRow(ctx,
+		`SELECT NOT EXISTS (SELECT 1 FROM collab.offers WHERE tenant_id = $1 AND item_id = $2 AND to_user_id = $3 AND state = 'pending')
+		    AND (
+		      (EXISTS (SELECT 1 FROM collab.work_item_collaborators WHERE tenant_id = $1 AND item_id = $2 AND user_id = $3)
+		       AND NOT EXISTS (SELECT 1 FROM collab.work_item_owners WHERE tenant_id = $1 AND item_id = $2 AND user_id = $3))
+		      OR EXISTS (SELECT 1 FROM collab.offers WHERE tenant_id = $1 AND item_id = $2 AND from_user_id = $3 AND state = 'pending' AND mode = 'transfer'))`,
+		tenantID, itemID, userID).Scan(&handed)
+	if err != nil {
+		return false, fmt.Errorf("read agent's place on item: %w", err)
+	}
+	return handed, nil
 }
 
 // AgentHops counts the sends and the comments agent accounts made on an item
-// since a person last acted on it. The sweep is nobody, so it neither counts
+// since a person last acted on it, or it last moved along its list's workflow:
+// that route is a person's, and its rounds bound its loops. Comments count
+// once per run, by the grant they were made with, so an agent that writes
+// several in one run takes one hop. The sweep is nobody, so it neither counts
 // nor resets.
 func AgentHops(ctx context.Context, q interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }, tenantID, itemID string) (sends, comments int, err error) {
 	err = q.QueryRow(ctx,
 		`SELECT count(*) FILTER (WHERE e.kind IN ('offer.sent', 'offer.assigned')),
-		        count(*) FILTER (WHERE e.kind = 'comment.added')
+		        count(DISTINCT (e.actor_user_id, COALESCE(e.actor_grant_id, e.id))) FILTER (WHERE e.kind = 'comment.added')
 		 FROM collab.events e
 		 WHERE e.tenant_id = $1 AND e.item_id = $2 AND e.kind IN ('offer.sent', 'offer.assigned', 'comment.added')
 		   AND e.actor_user_id LIKE 'acc\_%'
 		   AND e.seq > COALESCE((SELECT max(p.seq) FROM collab.events p
 		                         WHERE p.tenant_id = $1 AND p.item_id = $2
-		                           AND p.actor_user_id NOT LIKE 'acc\_%' AND p.actor_user_id <> $3), 0)`,
+		                           AND ((p.actor_user_id NOT LIKE 'acc\_%' AND p.actor_user_id <> $3) OR p.kind = 'workflow.moved')), 0)`,
 		tenantID, itemID, policy.System).Scan(&sends, &comments)
 	if err != nil {
 		return 0, 0, fmt.Errorf("count agent hops: %w", err)

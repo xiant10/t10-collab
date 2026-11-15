@@ -99,6 +99,10 @@ type Item struct {
 	Suggestion *Suggestion `json:"suggestion,omitempty"`
 	// Links point to where its work happens, such as a pull request.
 	Links []Link `json:"links"`
+	// Stage is the item's stage on its list's workflow, empty off it. Rounds
+	// counts the times it went back. See docs/workflows.md.
+	Stage  string `json:"stage,omitempty"`
+	Rounds int    `json:"rounds,omitempty"`
 }
 
 // Suggestion is who an assistant thinks an item should go to, and the note.
@@ -124,7 +128,7 @@ func closed(status string) bool { return status == StatusDone || status == Statu
 const itemColumns = `i.id, i.title, i.description, i.status, i.priority, i.due_at, i.creator_id, COALESCE(i.list_id, ''), i.version,
 	ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id),
 	ARRAY(SELECT c.user_id FROM collab.work_item_collaborators c WHERE c.tenant_id = i.tenant_id AND c.item_id = i.id ORDER BY c.user_id),
-	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at, ` + linksColumn
+	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at, COALESCE(i.stage, ''), i.rounds, ` + linksColumn
 
 func scanItem(row pgx.Row) (Item, error) {
 	var i Item
@@ -133,7 +137,7 @@ func scanItem(row pgx.Row) (Item, error) {
 	var at *time.Time
 	var links []byte
 	err := row.Scan(&i.ID, &i.Title, &i.Description, &i.Status, &i.Priority, &i.DueAt, &i.CreatorID, &i.ListID, &i.Version,
-		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at, &links)
+		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at, &i.Stage, &i.Rounds, &links)
 	if to != nil && at != nil {
 		i.Suggestion = &Suggestion{To: *to, Note: note, At: *at}
 	}
@@ -705,7 +709,8 @@ func (p Patch) apply(item *Item) ([]string, error) {
 }
 
 // Update edits fields and status. A status of cancelled, in or out, needs the
-// right to cancel. Closing an item withdraws its pending offers.
+// right to cancel. Closing an item withdraws its pending offers and takes it
+// off its list's workflow.
 func (s *Service) Update(ctx context.Context, c policy.Caller, id string, p Patch) (Item, error) {
 	if p.Version < 1 {
 		return Item{}, ErrInvalid
@@ -742,8 +747,14 @@ func (s *Service) Update(ctx context.Context, c policy.Caller, id string, p Patc
 		} else if len(changed) == 0 {
 			return nil
 		}
+		if closed(item.Status) && item.Stage != "" {
+			detail["stage_left"] = item.Stage
+			item.Stage, item.Rounds = "", 0
+		}
 		err = tx.QueryRow(ctx,
 			`UPDATE collab.work_items SET title = $3, description = $4, priority = $5, status = $6, due_at = $7,
+			        stage = CASE WHEN $6 IN ('done', 'cancelled') THEN NULL ELSE stage END,
+			        rounds = CASE WHEN $6 IN ('done', 'cancelled') THEN 0 ELSE rounds END,
 			        version = version + 1, updated_at = now()
 			 WHERE tenant_id = $1 AND id = $2 RETURNING version, updated_at`,
 			c.TenantID, id, item.Title, item.Description, item.Priority, item.Status, item.DueAt).Scan(&item.Version, &item.UpdatedAt)

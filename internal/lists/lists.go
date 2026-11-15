@@ -68,6 +68,8 @@ type List struct {
 	ArchivedAt *time.Time `json:"archived_at"`
 	// Members is filled on a single read.
 	Members []Member `json:"members,omitempty"`
+	// Workflow is filled on a single read, when the list has one.
+	Workflow *Workflow `json:"workflow,omitempty"`
 	// Counts is filled on the caller's page of lists.
 	Counts *Counts `json:"counts,omitempty"`
 }
@@ -220,6 +222,9 @@ func read(ctx context.Context, q interface {
 	}
 	if l.Members, err = pgx.CollectRows(rows, pgx.RowToStructByPos[Member]); err != nil {
 		return List{}, fmt.Errorf("read list members: %w", err)
+	}
+	if l.Workflow, err = ReadWorkflow(ctx, q, tenantID, id); err != nil {
+		return List{}, err
 	}
 	return l, nil
 }
