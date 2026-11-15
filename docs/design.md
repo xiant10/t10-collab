@@ -161,13 +161,13 @@ These live only in `policy`. List reads apply them in SQL before pagination and 
 | Delete | Any owner; the creator too, for an unowned list item. A soft delete |
 | Manage list members, rename, archive, link a unit, set the workflow | List owner |
 | Start on a workflow, finish a stage | See [`workflows.md`](workflows.md) |
-| Reassign a queued item, give a queued list an owner, tenant settings, agent intake | Module admin: a tenant admin today, read from `auth-server` on each request |
+| Reassign a queued item, give a queued list an owner, tenant settings, agent intake | Module admin: a tenant admin, or a member whose business role grants `work:admin`, read from `auth-server` on each request |
 
 - **Declining ends access.** A recipient not otherwise on the item can't see it after declining.
 - **One owner can't remove another.** Adding an owner always goes through a send.
 - **Only the reporting line skips acceptance.** A send is an assignment only when the recipient is beneath the sender, read fresh on each send, bypassing the cache. A workflow move assigns only to holders who agreed; see decision 2.
 - **Units never decide the reporting line.** Only the manager chain does.
-- **Tenant admins are module admins.** They see only the departure queue (titles and owners), tenant settings and agent intake. They control the org, so they can make themselves someone's manager; such changes are in auth's audit log.
+- **Module admins see only what needs them.** Tenant admins, and members whose business role grants `work:admin` (the "Task administrator" template), see the departure queue (titles and owners), tenant settings and agent intake. Collab reads `GET /v1/entitlements?module=collab` fresh on each admin request; a deployment whose catalog leaves collab out has tenant admins only. In Workbench the queue and settings are the Task admin page; agent intake stays on the teammate's page under Administration, which a tenant admin opens. Tenant admins control the org, so they can make themselves someone's manager; such changes are in auth's audit log.
 
 ### Manager visibility
 
@@ -253,7 +253,6 @@ t10 is meant to work as one system: one frame, one sign-in, one bell and search 
 
 **Not yet:**
 
-- Module admin from business roles. Collab's admin is the tenant admin, so a "Task admin" can't be given in Workbench's Roles tab. The per-item rules above stay as they are.
 - Record links that know the record: a link is a URL, so a task can't show a work order's current name or check who may see it.
 - Tasks outside Workbench: Property's bell shows only Property's notifications, and the mobile app has no tasks.
 
@@ -269,7 +268,6 @@ t10 is meant to work as one system: one frame, one sign-in, one bell and search 
 
 - [ ] **Can one send go to several people?** One recipient today. An item can already have several pending `share` offers, so a later version could send one to each.
 - [ ] **How long are closed items, soft deletes and history kept?** Depends on customer contracts, like the auth audit log.
-- [ ] **Business roles for the module admin.** See "Not yet" above.
 
 ## History
 

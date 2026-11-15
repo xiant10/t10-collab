@@ -1,0 +1,23 @@
+{
+  "module": "collab",
+  "prefix": "work",
+  "service": "t10-collab",
+  "version": 1,
+  "permissions": [
+    {
+      "key": "work:admin",
+      "description": "Administer tasks and shared lists: manager visibility, tasks and lists whose owners left, and which lists agent teammates take work from",
+      "lifecycle": "active"
+    }
+  ],
+  "templates": [
+    {
+      "id": "admin",
+      "name": "Task administrator",
+      "description": "Looks after tasks and shared lists for the company, without tenant administration",
+      "permissions": [
+        "work:admin"
+      ]
+    }
+  ]
+}

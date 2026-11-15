@@ -22,6 +22,7 @@ import (
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
 	"t10-collab/internal/policy"
+	"t10-collab/internal/roles"
 	"t10-collab/internal/telemetry"
 	"t10-collab/internal/workitems"
 	"t10-collab/verifier"
@@ -59,11 +60,19 @@ type Org interface {
 	Units(ctx context.Context, tenantID string) ([]people.Unit, error)
 }
 
+// Admins answers who administers collab: tenant admins, and members whose
+// business role grants work:admin.
+type Admins interface {
+	Administers(ctx context.Context, tenantID, userID string) (bool, error)
+}
+
 // Deps is what the server needs.
 type Deps struct {
 	Pool     *pgxpool.Pool
 	Verifier Verifier
 	Org      Org
+	// Admins, when nil, leaves collab's admin routes to tenant admins.
+	Admins   Admins
 	Items    *workitems.Service
 	Offers   *offers.Service
 	Lists    *lists.Service
@@ -815,16 +824,23 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request, c pol
 	writeJSON(w, http.StatusOK, settings)
 }
 
-// admin confirms the admin role with the auth service on each request, and
-// answers for the caller if it can't. A failed read is never a yes.
+// admin confirms with the auth service on each request that the caller
+// administers collab, and answers for the caller if it can't. A failed read is
+// never a yes.
 func (s *Server) admin(w http.ResponseWriter, r *http.Request, c policy.Caller) bool {
-	member, err := s.Org.Member(r.Context(), c.TenantID, c.UserID)
-	if errors.Is(err, people.ErrNotFound) || (err == nil && !(member.Active() && member.Role == "admin")) {
-		failure(w, r, policy.ErrForbidden)
-		return false
+	administers := func(ctx context.Context, tenantID, userID string) (bool, error) {
+		return roles.TenantAdmin(ctx, s.Org, tenantID, userID)
 	}
+	if s.Admins != nil {
+		administers = s.Admins.Administers
+	}
+	yes, err := administers(r.Context(), c.TenantID, c.UserID)
 	if err != nil {
 		failure(w, r, err)
+		return false
+	}
+	if !yes {
+		failure(w, r, policy.ErrForbidden)
 		return false
 	}
 	return true

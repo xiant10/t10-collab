@@ -692,7 +692,7 @@ paths:
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/settings:
     put:
-      summary: Change tenant settings, for a tenant admin
+      summary: Change tenant settings, for a module admin
       operationId: putSettings
       requestBody:
         required: true
@@ -706,14 +706,14 @@ paths:
     parameters:
       - {name: user, in: path, required: true, schema: {type: string}, description: An agent account's user ID, which starts with acc_}
     get:
-      summary: Who may offer work to an agent account, for a tenant admin
+      summary: Who may offer work to an agent account, for a module admin
       description: An agent account's reporting line can always assign it work. With nothing set, nobody else can offer it any. A user who isn't an agent account answers 404.
       operationId: getAgentIntake
       responses:
         "200": {$ref: "#/components/responses/Intake"}
         default: {$ref: "#/components/responses/Error"}
     put:
-      summary: Replace who may offer work to an agent account, for a tenant admin
+      summary: Replace who may offer work to an agent account, for a module admin
       description: A unit takes work from members of the units beneath it too, and a list from its members. Each list must exist. Sends to the account that nobody here allows answer 403 not_accepting.
       operationId: putAgentIntake
       requestBody:
@@ -726,7 +726,7 @@ paths:
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/intake-lists:
     get:
-      summary: Shared lists an agent account's intake can name, for a tenant admin
+      summary: Shared lists an agent account's intake can name, for a module admin
       description: Every shared list in the tenant by name, open ones first, up to 500, including lists the admin isn't on. Names and IDs only, nothing of their items.
       operationId: listIntakeLists
       responses:
@@ -750,7 +750,7 @@ paths:
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/departures:
     get:
-      summary: Items nobody can act on, oldest first, for a tenant admin
+      summary: Items nobody can act on, oldest first, for a module admin
       description: Titles and owners only. Closed items stay out, and come back if someone reopens them.
       operationId: listItemQueue
       parameters:
@@ -769,7 +769,7 @@ paths:
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/departures/{item}/reassign:
     post:
-      summary: Give a queued item a new owner, for a tenant admin
+      summary: Give a queued item a new owner, for a module admin
       description: Needs no acceptance. Replaces every owner, and a suspended owner stays on as a collaborator. Anything not in the queue answers 404.
       operationId: reassignItem
       parameters:
@@ -793,7 +793,7 @@ paths:
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/departures/lists:
     get:
-      summary: Lists nobody can manage, oldest first, for a tenant admin
+      summary: Lists nobody can manage, oldest first, for a module admin
       operationId: listListQueue
       parameters:
         - {name: cursor, in: query, schema: {type: string}}
@@ -811,7 +811,7 @@ paths:
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/departures/lists/{id}/owner:
     post:
-      summary: Give a queued list a new owner, for a tenant admin
+      summary: Give a queued list a new owner, for a module admin
       description: Anything not in the queue answers 404.
       operationId: setListOwner
       parameters:
