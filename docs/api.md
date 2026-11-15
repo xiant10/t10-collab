@@ -10,7 +10,7 @@ The reference for calling `t10-collab`: people's routes, admin routes, the agent
 | Another service, or a test | `http://t10-collab:18040` on the cluster, `:8082` in its own Compose stack | A person's own access token from `auth-server` |
 | An agent | `POST /mcp` | A delegated token whose grant lists `t10-collab` as an audience |
 
-Every route except `/mcp` and `/internal/v1/attention` takes a **person's own token**. The tenant and the person come from the token, never from the request. A delegated token (one an agent holds) is refused on every route with `403`, because agents reach collab only through `/mcp`.
+Every route except `/mcp`, `/internal/v1/attention` and the health checks takes a **person's own token**. `GET /healthz` answers `200` while the process runs, and `GET /readyz` `200` while Postgres answers, else `503`. The tenant and the person come from the token, never from the request. A delegated token (one an agent holds) is refused on every route with `403`, because agents reach collab only through `/mcp`.
 
 ## Conventions
 
