@@ -16,7 +16,7 @@ Multi-tenant task and work item collaboration service for the t10 platform.
 
 ## Status
 
-All five rollout steps are built. V1 is an API with no client of its own, and agents reach it over MCP at `/mcp`.
+Built and in use. Workbench is its client, and agents reach it over MCP at `/mcp`. [`docs/design.md`](docs/design.md) describes it as built, and [`docs/workflows.md`](docs/workflows.md) covers list workflows.
 
 ### Changes from the design
 
@@ -37,7 +37,7 @@ All five rollout steps are built. V1 is an API with no client of its own, and ag
 | `GET /v1/lists/{id}` isn't listed | Added, with members | A client has no other way to read them |
 | Removing or demoting a list's last owner isn't covered | Refused with `409 last_list_owner` | A list with no owner can't be managed |
 | Changing a link to another unit isn't covered | The old unit's members become `manual`, the same as clearing | Nobody loses access by surprise |
-| Agents get `work:send` and `work:delete` tools, outside default grants | No such tools | The design's open question recommended read and draft only. Fewer tools means less for injected text to reach |
+| Agents get `work:send` and `work:delete` tools, outside default grants | An assistant acting for a person has no such tools; only an agent teammate, acting as itself, sends, accepts, declines, claims and advances | The design's open question recommended read and draft only for assistants. Fewer tools means less for injected text to reach |
 | Delegated tokens use the API like any caller | Routes still refuse them, and only `/mcp` takes them | One action can't tell `PUT /v1/admin/settings` from an ordinary write, so `work:write` would reach settings for an admin's agent |
 
 The first three, and the four on departures, come from the design review. `docs/design.md` now describes departures as built.

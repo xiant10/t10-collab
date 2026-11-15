@@ -57,6 +57,9 @@ type Member struct {
 	UserID string `json:"user_id"`
 	Role   string `json:"role"`
 	Source string `json:"source"`
+	// Holds says a person who is a plain member agreed to hold stages of the
+	// list's workflow. Owners and agent accounts need not.
+	Holds bool `json:"holds,omitempty"`
 }
 
 // List is a named group of items and the people who manage them.
@@ -72,6 +75,8 @@ type List struct {
 	Workflow *Workflow `json:"workflow,omitempty"`
 	// Counts is filled on the caller's page of lists.
 	Counts *Counts `json:"counts,omitempty"`
+	// HasWorkflow is filled on the caller's page of lists.
+	HasWorkflow bool `json:"has_workflow,omitempty"`
 }
 
 // Counts sums up a list for an overview. Open is todo and doing.
@@ -143,7 +148,8 @@ func (s *Service) Mine(ctx context.Context, c policy.Caller, archived bool, curs
 		   (SELECT count(*) FROM collab.work_items i WHERE i.tenant_id = l.tenant_id AND i.list_id = l.id AND i.deleted_at IS NULL AND i.status IN ('todo', 'doing')),
 		   (SELECT count(*) FROM collab.work_items i WHERE i.tenant_id = l.tenant_id AND i.list_id = l.id AND i.deleted_at IS NULL AND i.status IN ('todo', 'doing')
 		      AND NOT EXISTS (SELECT 1 FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id)),
-		   (SELECT count(*) FROM collab.list_members a WHERE a.tenant_id = l.tenant_id AND a.list_id = l.id)
+		   (SELECT count(*) FROM collab.list_members a WHERE a.tenant_id = l.tenant_id AND a.list_id = l.id),
+		   EXISTS (SELECT 1 FROM collab.list_workflows w WHERE w.tenant_id = l.tenant_id AND w.list_id = l.id)
 		 FROM collab.lists l
 		 JOIN collab.list_members m ON m.tenant_id = l.tenant_id AND m.list_id = l.id AND m.user_id = $2
 		 WHERE l.tenant_id = $1 AND (l.archived_at IS NOT NULL) = $3 AND (NOT $4 OR (l.created_at, l.id) < ($5, $6))
@@ -155,7 +161,7 @@ func (s *Service) Mine(ctx context.Context, c policy.Caller, archived bool, curs
 	found, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (List, error) {
 		var l List
 		var n Counts
-		err := row.Scan(&l.ID, &l.Name, &l.OrgUnitID, &l.CreatedAt, &l.ArchivedAt, &n.Open, &n.Unclaimed, &n.Members)
+		err := row.Scan(&l.ID, &l.Name, &l.OrgUnitID, &l.CreatedAt, &l.ArchivedAt, &n.Open, &n.Unclaimed, &n.Members, &l.HasWorkflow)
 		l.Counts = &n
 		return l, err
 	})
@@ -216,7 +222,7 @@ func read(ctx context.Context, q interface {
 	if err != nil {
 		return List{}, fmt.Errorf("read list: %w", err)
 	}
-	rows, err := q.Query(ctx, "SELECT user_id, role, source FROM collab.list_members WHERE tenant_id = $1 AND list_id = $2 ORDER BY user_id", tenantID, id)
+	rows, err := q.Query(ctx, "SELECT user_id, role, source, holds_at IS NOT NULL FROM collab.list_members WHERE tenant_id = $1 AND list_id = $2 ORDER BY user_id", tenantID, id)
 	if err != nil {
 		return List{}, fmt.Errorf("read list members: %w", err)
 	}
@@ -420,13 +426,18 @@ func (s *Service) PutMember(ctx context.Context, c policy.Caller, id, userID, ro
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO collab.list_members (tenant_id, list_id, user_id, role, source) VALUES ($1, $2, $3, $4, 'manual')
-			 ON CONFLICT (tenant_id, list_id, user_id) DO UPDATE SET role = $4, source = 'manual'`,
+			 ON CONFLICT (tenant_id, list_id, user_id) DO UPDATE SET role = $4, source = 'manual',
+			   -- An owner made a member keeps the stages they held as an owner.
+			   holds_at = CASE WHEN list_members.role = 'owner' AND $4 = 'member' THEN COALESCE(list_members.holds_at, now()) ELSE list_members.holds_at END`,
 			c.TenantID, id, userID, role); err != nil {
 			return fmt.Errorf("put member: %w", err)
 		}
-		return activity.Record(ctx, tx, c, activity.Change{
+		if err := activity.Record(ctx, tx, c, activity.Change{
 			Kind: "list.member_set", Detail: map[string]any{"list_id": id, "user_id": userID, "role": role}, Notify: []string{userID},
-		})
+		}); err != nil {
+			return err
+		}
+		return KeepWorkflow(ctx, tx, c, id)
 	})
 }
 
@@ -501,9 +512,12 @@ func (s *Service) SetOwner(ctx context.Context, c policy.Caller, id, to string) 
 		if _, err := tx.Exec(ctx, "UPDATE collab.lists SET queued_at = NULL, queue_reason = NULL WHERE tenant_id = $1 AND id = $2", c.TenantID, id); err != nil {
 			return fmt.Errorf("unqueue list: %w", err)
 		}
-		return activity.Record(ctx, tx, c, activity.Change{
+		if err := activity.Record(ctx, tx, c, activity.Change{
 			Kind: "list.owner_assigned", Detail: map[string]any{"list_id": id, "user_id": to}, Notify: []string{to},
-		})
+		}); err != nil {
+			return err
+		}
+		return KeepWorkflow(ctx, tx, c, id)
 	})
 }
 
@@ -526,9 +540,12 @@ func RemoveDeparted(ctx context.Context, tx pgx.Tx, c policy.Caller, id string, 
 	if err != nil {
 		return fmt.Errorf("read list owners: %w", err)
 	}
-	return activity.Record(ctx, tx, c, activity.Change{
+	if err := activity.Record(ctx, tx, c, activity.Change{
 		Kind: "list.members_departed", Detail: map[string]any{"list_id": id, "user_ids": gone}, Notify: owners,
-	})
+	}); err != nil {
+		return err
+	}
+	return KeepWorkflow(ctx, tx, c, id)
 }
 
 // RemoveMember takes someone off a list, for a list owner, or for anyone leaving
@@ -573,8 +590,11 @@ func (s *Service) RemoveMember(ctx context.Context, c policy.Caller, id, userID 
 		if leaving {
 			notify = nil
 		}
-		return activity.Record(ctx, tx, c, activity.Change{
+		if err := activity.Record(ctx, tx, c, activity.Change{
 			Kind: "list.member_removed", Detail: map[string]any{"list_id": id, "user_id": userID}, Notify: notify,
-		})
+		}); err != nil {
+			return err
+		}
+		return KeepWorkflow(ctx, tx, c, id)
 	})
 }

@@ -240,11 +240,14 @@ func (s *Service) Create(ctx context.Context, c policy.Caller, n NewItem, after 
 			}
 		}
 		// An agent account on the item's list is told, so it can claim the item
-		// as any member may. People see new list items on the list itself.
+		// as any member may. People see new list items on the list itself. A
+		// workflow that starts each new item hands it to its first stage
+		// instead, so nobody else is told.
 		var notify []string
 		if n.ListID != "" {
 			rows, err := tx.Query(ctx,
-				`SELECT user_id FROM collab.list_members WHERE tenant_id = $1 AND list_id = $2 AND user_id LIKE 'acc\_%'`,
+				`SELECT user_id FROM collab.list_members WHERE tenant_id = $1 AND list_id = $2 AND user_id LIKE 'acc\_%'
+				   AND NOT EXISTS (SELECT 1 FROM collab.list_workflows w WHERE w.tenant_id = $1 AND w.list_id = $2 AND w.auto_start)`,
 				c.TenantID, n.ListID)
 			if err != nil {
 				return fmt.Errorf("read list agents: %w", err)
@@ -916,6 +919,73 @@ func (s *Service) Claim(ctx context.Context, c policy.Caller, id string) (Item, 
 		return Item{}, err
 	}
 	return item, nil
+}
+
+// SetList puts an item the caller owns on a shared list they're a member of,
+// or takes it off its list when listID is empty, so work made elsewhere, such
+// as from a conversation, can join a team's list. An item on a workflow leaves
+// it, and its history says why. An item off a list keeps its owners.
+func (s *Service) SetList(ctx context.Context, c policy.Caller, id, listID string) (Item, error) {
+	var item Item
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		locked, relation, err := Lock(ctx, tx, c, id)
+		if err != nil {
+			return err
+		}
+		if !relation.Owner {
+			return policy.ErrForbidden
+		}
+		if locked.Closed() {
+			return ErrClosed
+		}
+		if locked.ListID == listID {
+			item = locked
+			return nil
+		}
+		if listID != "" {
+			var open bool
+			err := tx.QueryRow(ctx,
+				`SELECT l.archived_at IS NULL FROM collab.lists l
+				 JOIN collab.list_members m ON m.tenant_id = l.tenant_id AND m.list_id = l.id AND m.user_id = $3
+				 WHERE l.tenant_id = $1 AND l.id = $2 FOR KEY SHARE OF l`, c.TenantID, listID, c.UserID).Scan(&open)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return policy.ErrNotFound
+			}
+			if err != nil {
+				return fmt.Errorf("read list: %w", err)
+			}
+			if !open {
+				return ErrListArchived
+			}
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE collab.work_items SET list_id = NULLIF($3, ''), stage = NULL, rounds = 0, version = version + 1, updated_at = now()
+			 WHERE tenant_id = $1 AND id = $2`, c.TenantID, id, listID); err != nil {
+			return fmt.Errorf("set list: %w", err)
+		}
+		notify, err := activity.PeopleOn(ctx, tx, c.TenantID, id)
+		if err != nil {
+			return err
+		}
+		if locked.Stage != "" {
+			if err := activity.Record(ctx, tx, c, activity.Change{
+				ItemID: id, Kind: "workflow.left", Detail: map[string]any{"reason": "list_changed", "stage": locked.Stage}, Notify: notify,
+			}); err != nil {
+				return err
+			}
+		}
+		if err := activity.Record(ctx, tx, c, activity.Change{
+			ItemID: id, Kind: "item.list_changed", Detail: map[string]any{"list_id": listID, "from_list_id": locked.ListID}, Notify: notify,
+		}); err != nil {
+			return err
+		}
+		item, err = readRow(ctx, tx, c.TenantID, id)
+		return err
+	})
+	if err != nil {
+		return Item{}, err
+	}
+	return item.ForReader(c.UserID), nil
 }
 
 // AddCollaborator lets someone edit an item and comment on it. The org read runs
