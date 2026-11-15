@@ -452,6 +452,12 @@ func changeOwners(ctx context.Context, tx pgx.Tx, c policy.Caller, o Offer) erro
 		c.TenantID, o.ItemID, o.FromUserID); err != nil {
 		return fmt.Errorf("remove owner: %w", err)
 	}
+	// A send outside the workflow takes the item off it; a list owner can put
+	// it back at a stage.
+	if _, err := tx.Exec(ctx, "UPDATE collab.work_items SET stage = NULL, rounds = 0 WHERE tenant_id = $1 AND id = $2 AND stage IS NOT NULL",
+		c.TenantID, o.ItemID); err != nil {
+		return fmt.Errorf("take item off its workflow: %w", err)
+	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO collab.work_item_collaborators (tenant_id, item_id, user_id, added_by) VALUES ($1, $2, $3, $4)
 		 ON CONFLICT DO NOTHING`, c.TenantID, o.ItemID, o.FromUserID, o.ToUserID); err != nil {

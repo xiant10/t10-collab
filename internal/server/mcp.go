@@ -161,13 +161,24 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_get",
-			description: "Read one work item in full. Its version is needed to update it.",
+			description: "Read one work item in full. Its version is needed to update it. On a list with a workflow, workflow shows its stage, the stage's guide, and where pass and changes take it.",
 			action:      policy.ActionRead,
 			schema:      object([]string{"id"}, map[string]any{"id": text(id)}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				ID string `json:"id"`
 			}) (any, error) {
-				return s.Items.View(ctx, c, a.ID)
+				item, err := s.Items.View(ctx, c, a.ID)
+				if err != nil {
+					return nil, err
+				}
+				place, err := s.Offers.PlaceOf(ctx, c.TenantID, item)
+				if err != nil {
+					return nil, err
+				}
+				return struct {
+					workitems.Item
+					Workflow *offers.Place `json:"workflow,omitempty"`
+				}{item, place}, nil
 			}),
 		},
 		{
@@ -368,6 +379,24 @@ func (s *Server) tools() []tool {
 				Note string `json:"note"`
 			}) (any, error) {
 				return s.Offers.Send(ctx, c, a.ID, offers.Send{To: a.To, Mode: a.Mode, Note: a.Note})
+			}),
+		},
+		{
+			name:        "work_advance",
+			description: "For agent teammates only. Finish your stage of a work item on a workflow, as work_get's workflow shows it: pass sends it to the next stage, or marks it done after the last; changes sends it back to the stage that fixes it, with a note saying what to fix. Use it instead of work_send when the item has a stage.",
+			action:      policy.ActionSend,
+			agentOnly:   true,
+			schema: object([]string{"id", "result", "note"}, map[string]any{
+				"id":     text(id),
+				"result": choice("pass when your stage's check is good, changes when something must be fixed first", offers.ResultPass, offers.ResultChanges),
+				"note":   text("What you did and found; with changes, what to fix"),
+			}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				ID     string `json:"id"`
+				Result string `json:"result"`
+				Note   string `json:"note"`
+			}) (any, error) {
+				return s.Offers.Advance(ctx, c, a.ID, a.Result, a.Note)
 			}),
 		},
 		{

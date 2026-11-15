@@ -339,6 +339,44 @@ paths:
       responses:
         "201": {$ref: "#/components/responses/Offer"}
         default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/advance:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Finish the caller's stage of an item on its list's workflow
+      description: pass moves it to the next stage's holder, or marks it done after the last stage; changes sends it back to the stage's on_changes stage, or to the workflow's lead past its rounds. See docs/workflows.md.
+      operationId: advanceWorkItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [result]
+              properties:
+                result: {type: string, enum: [pass, changes]}
+                note: {type: string, maxLength: 2000, description: Needed with changes, to say what to fix}
+      responses:
+        "200": {$ref: "#/components/responses/Item"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/stage:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Start an item on its list's workflow, or put it at a stage
+      description: An owner of an item off the workflow may start it; a list owner may put it at any stage. Its rounds start over.
+      operationId: putWorkItemAtStage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                stage: {type: string, description: The first stage when left out}
+                note: {type: string, maxLength: 2000}
+      responses:
+        "200": {$ref: "#/components/responses/Item"}
+        default: {$ref: "#/components/responses/Error"}
   /v1/work-items/{id}/suggestion:
     parameters:
       - {$ref: "#/components/parameters/id"}
@@ -484,6 +522,37 @@ paths:
       responses:
         "204": {description: Removed}
         default: {$ref: "#/components/responses/Error"}
+  /v1/lists/{id}/workflow:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    put:
+      summary: Set the list's workflow, as a list owner
+      description: Every holder must be on the list, and every agent holder take work from it; the lead is a list owner. Items at a stage left out leave the workflow and stay with their holders.
+      operationId: setListWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stages]
+              properties:
+                stages: {type: array, minItems: 1, maxItems: 12, items: {$ref: "#/components/schemas/Stage"}}
+                rounds: {type: integer, minimum: 1, maximum: 20, default: 3}
+                lead: {type: string, description: The caller when left out}
+      responses:
+        "200":
+          description: The workflow
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Workflow"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Remove the list's workflow, as a list owner; its items stay with their holders
+      operationId: removeListWorkflow
+      responses:
+        "204": {description: Removed}
+        default: {$ref: "#/components/responses/Error"}
   /v1/people:
     get:
       summary: Find an active teammate by display name
@@ -617,6 +686,30 @@ paths:
             schema: {$ref: "#/components/schemas/Intake"}
       responses:
         "200": {$ref: "#/components/responses/Intake"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/admin/intake-lists:
+    get:
+      summary: Shared lists an agent account's intake can name, for a tenant admin
+      description: Every shared list in the tenant by name, open ones first, up to 500, including lists the admin isn't on. Names and IDs only, nothing of their items.
+      operationId: listIntakeLists
+      responses:
+        "200":
+          description: The lists
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lists]
+                properties:
+                  lists:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, archived]
+                      properties:
+                        id: {type: string}
+                        name: {type: string}
+                        archived: {type: boolean}
         default: {$ref: "#/components/responses/Error"}
   /v1/admin/departures:
     get:
@@ -783,6 +876,34 @@ components:
             open: {type: integer, description: Items to do or in progress}
             unclaimed: {type: integer, description: Open items nobody owns}
             members: {type: integer}
+        workflow: {$ref: "#/components/schemas/Workflow"}
+    Stage:
+      type: object
+      required: [name, holder]
+      properties:
+        id: {type: string, description: Kept across edits; left out for a new stage}
+        name: {type: string, maxLength: 60}
+        holder: {type: string, description: A list member, person or agent}
+        on_changes: {type: string, description: An earlier stage an item goes back to when its holder finds something}
+        guide: {type: string, maxLength: 2000}
+    Workflow:
+      type: object
+      properties:
+        list_id: {type: string}
+        version: {type: integer}
+        stages: {type: array, items: {$ref: "#/components/schemas/Stage"}}
+        rounds: {type: integer, description: How many times an item may go back before it goes to the lead}
+        lead: {type: string}
+        updated_by: {type: string}
+        updated_at: {type: string, format: date-time}
+    Step:
+      type: object
+      properties:
+        stage: {type: string}
+        name: {type: string}
+        to: {type: string}
+        done: {type: boolean}
+        reason: {type: string, enum: [rounds, holder_gone]}
     Settings:
       type: object
       required: [manager_visibility]
@@ -841,6 +962,17 @@ components:
             note: {type: string}
             at: {type: string, format: date-time}
         links: {type: array, items: {$ref: "#/components/schemas/Link"}}
+        stage: {type: string, description: Its stage on its list's workflow; left out off it}
+        rounds: {type: integer, description: Times it went back since it was started or put at a stage}
+        workflow:
+          type: object
+          description: On a single read of an item on a list with a workflow
+          properties:
+            workflow: {$ref: "#/components/schemas/Workflow"}
+            stage: {oneOf: [{$ref: "#/components/schemas/Stage"}, {type: "null"}]}
+            pass: {$ref: "#/components/schemas/Step"}
+            changes: {$ref: "#/components/schemas/Step"}
+            rounds: {type: integer}
     Link:
       type: object
       properties:
@@ -903,6 +1035,10 @@ components:
         - managed_by_unit
         - not_accepting
         - not_found
+        - not_on_list
+        - holder_not_accepting
+        - not_on_workflow
+        - no_way_back
         - offer_exists
         - offer_not_pending
         - org_unavailable

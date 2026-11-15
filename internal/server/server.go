@@ -106,6 +106,8 @@ func (s *Server) routes() []route {
 		{"POST", "/v1/work-items/{id}/links", policy.ActionWrite, s.handleAddLink},
 		{"DELETE", "/v1/work-items/{id}/links/{link}", policy.ActionWrite, s.handleRemoveLink},
 		{"POST", "/v1/work-items/{id}/send", policy.ActionSend, s.handleSend},
+		{"POST", "/v1/work-items/{id}/advance", policy.ActionSend, s.handleAdvance},
+		{"POST", "/v1/work-items/{id}/stage", policy.ActionSend, s.handlePutAtStage},
 		{"DELETE", "/v1/work-items/{id}/suggestion", policy.ActionWrite, s.handleDismissSuggestion},
 
 		{"GET", "/v1/offers", policy.ActionRead, s.handleListOffers},
@@ -119,6 +121,8 @@ func (s *Server) routes() []route {
 		{"PATCH", "/v1/lists/{id}", policy.ActionWrite, s.handleUpdateList},
 		{"PUT", "/v1/lists/{id}/members/{user}", policy.ActionWrite, s.handlePutListMember},
 		{"DELETE", "/v1/lists/{id}/members/{user}", policy.ActionWrite, s.handleRemoveListMember},
+		{"PUT", "/v1/lists/{id}/workflow", policy.ActionWrite, s.handleSetWorkflow},
+		{"DELETE", "/v1/lists/{id}/workflow", policy.ActionWrite, s.handleRemoveWorkflow},
 
 		{"GET", "/v1/people", policy.ActionRead, s.handlePeople},
 		{"GET", "/v1/units", policy.ActionRead, s.handleUnits},
@@ -134,6 +138,7 @@ func (s *Server) routes() []route {
 		{"POST", "/v1/admin/departures/lists/{id}/owner", policy.ActionWrite, s.handleSetListOwner},
 		{"GET", "/v1/admin/agents/{user}/intake", policy.ActionRead, s.handleGetIntake},
 		{"PUT", "/v1/admin/agents/{user}/intake", policy.ActionWrite, s.handlePutIntake},
+		{"GET", "/v1/admin/intake-lists", policy.ActionRead, s.handleIntakeLists},
 	}
 }
 
@@ -310,6 +315,10 @@ func classify(err error) (status int, code, message string) {
 		{lists.ErrBadUnit, http.StatusUnprocessableEntity, "invalid_unit"},
 		{lists.ErrLastOwner, http.StatusConflict, "last_list_owner"},
 		{lists.ErrManagedByUnit, http.StatusConflict, "managed_by_unit"},
+		{lists.ErrNotOnList, http.StatusUnprocessableEntity, "not_on_list"},
+		{lists.ErrHolderNotAccepting, http.StatusUnprocessableEntity, "holder_not_accepting"},
+		{offers.ErrNotOnWorkflow, http.StatusConflict, "not_on_workflow"},
+		{offers.ErrNoWayBack, http.StatusConflict, "no_way_back"},
 		{offers.ErrAlreadyOwner, http.StatusConflict, "already_owner"},
 		{offers.ErrItemClosed, http.StatusConflict, "item_closed"},
 		{offers.ErrOfferExists, http.StatusConflict, "offer_exists"},
@@ -421,13 +430,51 @@ func (s *Server) handleGetItem(w http.ResponseWriter, r *http.Request, c policy.
 		failure(w, r, err)
 		return
 	}
+	place, err := s.Offers.PlaceOf(r.Context(), c.TenantID, item)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		workitems.Item
 		Can           policy.Can          `json:"can"`
 		PendingOffers []offers.Offer      `json:"pending_offers"`
 		Working       []workitems.Working `json:"working"`
 		Mention       *workitems.Mention  `json:"mention,omitempty"`
-	}{item, relation.Can(item.Closed()), pending, working, mention})
+		Workflow      *offers.Place       `json:"workflow,omitempty"`
+	}{item, relation.Can(item.Closed()), pending, working, mention, place})
+}
+
+func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var req struct {
+		Result string `json:"result"`
+		Note   string `json:"note"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.Offers.Advance(r.Context(), c, r.PathValue("id"), req.Result, req.Note)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handlePutAtStage(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var req struct {
+		Stage string `json:"stage"`
+		Note  string `json:"note"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.Offers.PutAtStage(r.Context(), c, r.PathValue("id"), req.Stage, req.Note)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) handleDismissSuggestion(w http.ResponseWriter, r *http.Request, c policy.Caller) {
@@ -658,6 +705,27 @@ func (s *Server) handleGetList(w http.ResponseWriter, r *http.Request, c policy.
 	writeJSON(w, http.StatusOK, list)
 }
 
+func (s *Server) handleSetWorkflow(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var in lists.WorkflowInput
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	wf, err := s.Lists.SetWorkflow(r.Context(), c, r.PathValue("id"), in)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, wf)
+}
+
+func (s *Server) handleRemoveWorkflow(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	if err := s.Lists.RemoveWorkflow(r.Context(), c, r.PathValue("id")); err != nil {
+		failure(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleUpdateList(w http.ResponseWriter, r *http.Request, c policy.Caller) {
 	var patch lists.Patch
 	if !decodeJSON(w, r, &patch) {
@@ -866,6 +934,20 @@ func (s *Server) handleGetIntake(w http.ResponseWriter, r *http.Request, c polic
 		return
 	}
 	writeJSON(w, http.StatusOK, in)
+}
+
+// handleIntakeLists answers the shared lists an admin may name in an agent
+// account's intake.
+func (s *Server) handleIntakeLists(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	if !s.admin(w, r, c) {
+		return
+	}
+	lists, err := s.Offers.IntakeLists(r.Context(), c)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lists": lists})
 }
 
 func (s *Server) handlePutIntake(w http.ResponseWriter, r *http.Request, c policy.Caller) {
