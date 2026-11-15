@@ -634,7 +634,7 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, message rpcMess
 	}
 	ctx, end := telemetry.Continue(r.Context(), params.Meta.Traceparent, "tool "+t.name)
 	defer end()
-	caller := policy.Caller{TenantID: who.TenantID, UserID: who.UserID, GrantID: who.Agent.GrantID}
+	caller := policy.Caller{TenantID: who.TenantID, UserID: who.UserID, GrantID: who.Agent.GrantID, GrantChain: grantIDs(who.Agent.Chain)}
 	out, err := t.run(ctx, caller, params.Arguments)
 	slog.Info("tool call", "tool", t.name, "grant", who.Agent.GrantID, "ok", err == nil)
 	if err != nil {
@@ -681,4 +681,13 @@ func toolContent(out any) (map[string]any, error) {
 // errors are kept for protocol mistakes.
 func toolFailure(code, text string) map[string]any {
 	return map[string]any{"isError": true, "content": []map[string]any{{"type": "text", "text": code + ": " + text}}}
+}
+
+// grantIDs is a token's grant chain as IDs, root first.
+func grantIDs(chain []verifier.Link) []string {
+	ids := make([]string, len(chain))
+	for i, link := range chain {
+		ids[i] = link.ID
+	}
+	return ids
 }

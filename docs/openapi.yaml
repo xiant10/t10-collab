@@ -299,6 +299,7 @@ paths:
               required: [body]
               properties:
                 body: {type: string, maxLength: 10000}
+                mentions: {type: array, maxItems: 20, items: {type: string}, description: User IDs to tell, who must be able to read the item}
       responses:
         "201":
           description: Added

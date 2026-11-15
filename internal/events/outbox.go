@@ -38,8 +38,11 @@ type Event struct {
 	// For is the agent account the event concerns.
 	For   string `json:"for"`
 	Actor string `json:"actor"`
-	// CauseGrant is the grant of the run that caused it, when an agent did.
-	CauseGrant string `json:"cause_grant,omitempty"`
+	// CauseGrant is the grant of the run that caused it, when an agent did, and
+	// CauseChain that grant's chain, root first, which holds the grant the run
+	// was started with.
+	CauseGrant string   `json:"cause_grant,omitempty"`
+	CauseChain []string `json:"cause_chain,omitempty"`
 	// Hops counts agent sends, or agent comments if more, on the item since a
 	// person last acted on it.
 	Hops int       `json:"hops"`
@@ -87,7 +90,7 @@ func (p *Poster) Once(ctx context.Context) error {
 	}
 	return pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT tenant_id, id, kind, COALESCE(item_id, ''), for_user_id, actor_user_id, COALESCE(cause_grant_id, ''), hops, created_at
+			`SELECT tenant_id, id, kind, COALESCE(item_id, ''), for_user_id, actor_user_id, COALESCE(cause_grant_id, ''), cause_chain, hops, created_at
 			 FROM collab.outbox WHERE sent_at IS NULL AND next_at <= now()
 			 ORDER BY seq LIMIT $1 FOR UPDATE SKIP LOCKED`, batch)
 		if err != nil {
@@ -96,7 +99,7 @@ func (p *Poster) Once(ctx context.Context) error {
 		due, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Event, error) {
 			var e Event
 			var item string
-			err := row.Scan(&e.Tenant, &e.ID, &e.Kind, &item, &e.For, &e.Actor, &e.CauseGrant, &e.Hops, &e.At)
+			err := row.Scan(&e.Tenant, &e.ID, &e.Kind, &item, &e.For, &e.Actor, &e.CauseGrant, &e.CauseChain, &e.Hops, &e.At)
 			e.Source = "t10-collab"
 			if item != "" {
 				e.Ref = "collab:work_item:" + item
