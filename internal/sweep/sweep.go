@@ -129,8 +129,11 @@ func (s *Sweeper) syncList(ctx context.Context, l linked) error {
 		if _, err := lists.AddOrgMembers(ctx, tx, l.tenantID, l.id, members); err != nil {
 			return err
 		}
-		_, err = lists.RemoveOrgMembers(ctx, tx, l.tenantID, l.id, members)
-		return err
+		removed, err := lists.RemoveOrgMembers(ctx, tx, l.tenantID, l.id, members)
+		if err != nil || removed == 0 {
+			return err
+		}
+		return lists.KeepWorkflow(ctx, tx, c, l.id)
 	})
 }
 

@@ -223,6 +223,25 @@ paths:
       responses:
         "200": {$ref: "#/components/responses/Item"}
         default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/list:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    put:
+      summary: Put an item the caller owns on a shared list they're on, or take it off with an empty list_id
+      description: An item on a workflow leaves it. One put on a list whose workflow starts each new item starts at the first stage.
+      operationId: setWorkItemList
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [list_id]
+              properties:
+                list_id: {type: string}
+      responses:
+        "200": {$ref: "#/components/responses/Item"}
+        default: {$ref: "#/components/responses/Error"}
   /v1/work-items/{id}/owners/me:
     parameters:
       - {$ref: "#/components/parameters/id"}
@@ -344,7 +363,7 @@ paths:
       - {$ref: "#/components/parameters/id"}
     post:
       summary: Finish the caller's stage of an item on its list's workflow
-      description: pass moves it to the next stage's holder, or marks it done after the last stage; changes sends it back to the stage's on_changes stage, or to the workflow's lead past its rounds. See docs/workflows.md.
+      description: pass moves it to the next stage's holder, or marks it done after the last stage; changes sends it back to the stage's on_changes stage, or to the workflow's lead past its rounds. A pass with to goes to a later stage over stages that may be skipped. See docs/workflows.md.
       operationId: advanceWorkItem
       requestBody:
         required: true
@@ -355,7 +374,8 @@ paths:
               required: [result]
               properties:
                 result: {type: string, enum: [pass, changes]}
-                note: {type: string, maxLength: 2000, description: Needed with changes, to say what to fix}
+                note: {type: string, maxLength: 2000, description: Needed with changes, to say what to fix, and with to, to say why the stages skipped don't apply}
+                to: {type: string, description: With pass, a stage from the item's workflow skip list}
       responses:
         "200": {$ref: "#/components/responses/Item"}
         default: {$ref: "#/components/responses/Error"}
@@ -364,7 +384,7 @@ paths:
       - {$ref: "#/components/parameters/id"}
     post:
       summary: Start an item on its list's workflow, or put it at a stage
-      description: An owner of an item off the workflow may start it; a list owner may put it at any stage. Its rounds start over.
+      description: An owner of an item off the workflow may start it, and any list member may start an item nobody owns at the first stage; a list owner may put it at any stage. Its rounds start over.
       operationId: putWorkItemAtStage
       requestBody:
         content:
@@ -522,6 +542,22 @@ paths:
       responses:
         "204": {description: Removed}
         default: {$ref: "#/components/responses/Error"}
+  /v1/lists/{id}/holding:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    put:
+      summary: Agree to hold stages of the list's workflow, as a person who is a plain member
+      description: Until they agree, moves pass them over. Owners and agent accounts need not agree.
+      operationId: holdListStages
+      responses:
+        "204": {description: Agreed}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: No longer hold stages of the list's workflow; items held now stay
+      operationId: stopHoldingListStages
+      responses:
+        "204": {description: Stopped}
+        default: {$ref: "#/components/responses/Error"}
   /v1/lists/{id}/workflow:
     parameters:
       - {$ref: "#/components/parameters/id"}
@@ -540,6 +576,7 @@ paths:
                 stages: {type: array, minItems: 1, maxItems: 12, items: {$ref: "#/components/schemas/Stage"}}
                 rounds: {type: integer, minimum: 1, maximum: 20, default: 3}
                 lead: {type: string, description: The caller when left out}
+                auto_start: {type: boolean, description: Start each new item on the list at the first stage}
       responses:
         "200":
           description: The workflow
@@ -869,6 +906,7 @@ components:
               user_id: {type: string}
               role: {type: string, enum: [owner, member]}
               source: {type: string, enum: [manual, org]}
+              holds: {type: boolean, description: A plain member who agreed to hold stages of the workflow}
         counts:
           type: object
           description: Filled on the caller's page of lists
@@ -876,14 +914,17 @@ components:
             open: {type: integer, description: Items to do or in progress}
             unclaimed: {type: integer, description: Open items nobody owns}
             members: {type: integer}
+        has_workflow: {type: boolean, description: Filled on the caller's page of lists}
         workflow: {$ref: "#/components/schemas/Workflow"}
     Stage:
       type: object
-      required: [name, holder]
+      required: [name]
       properties:
         id: {type: string, description: Kept across edits; left out for a new stage}
         name: {type: string, maxLength: 60}
-        holder: {type: string, description: A list member, person or agent}
+        holders: {type: array, minItems: 1, maxItems: 8, items: {type: string}, description: List members, people or agents; the item goes to the one that held it before, or else the one with the fewest open items on the list}
+        holder: {type: string, description: The first of holders; on input, one holder when holders is left out}
+        skip_when: {type: string, maxLength: 300, description: When the holder before may pass over this stage; not on the first stage}
         on_changes: {type: string, description: An earlier stage an item goes back to when its holder finds something}
         guide: {type: string, maxLength: 2000}
     Workflow:
@@ -894,6 +935,7 @@ components:
         stages: {type: array, items: {$ref: "#/components/schemas/Stage"}}
         rounds: {type: integer, description: How many times an item may go back before it goes to the lead}
         lead: {type: string}
+        auto_start: {type: boolean}
         updated_by: {type: string}
         updated_at: {type: string, format: date-time}
     Step:
@@ -901,7 +943,9 @@ components:
       properties:
         stage: {type: string}
         name: {type: string}
-        to: {type: string}
+        to: {type: string, description: Left out when the stage has several holders}
+        holders: {type: array, items: {type: string}}
+        skips: {type: array, items: {type: string}, description: The stages a skip passes over}
         done: {type: boolean}
         reason: {type: string, enum: [rounds, holder_gone]}
     Settings:
@@ -972,6 +1016,7 @@ components:
             stage: {oneOf: [{$ref: "#/components/schemas/Stage"}, {type: "null"}]}
             pass: {$ref: "#/components/schemas/Step"}
             changes: {$ref: "#/components/schemas/Step"}
+            skip: {type: array, items: {$ref: "#/components/schemas/Step"}, description: Later stages a pass may go to instead}
             rounds: {type: integer}
     Link:
       type: object
@@ -1039,6 +1084,7 @@ components:
         - holder_not_accepting
         - not_on_workflow
         - no_way_back
+        - cant_skip
         - offer_exists
         - offer_not_pending
         - org_unavailable

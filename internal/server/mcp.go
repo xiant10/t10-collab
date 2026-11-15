@@ -289,7 +289,10 @@ func (s *Server) tools() []tool {
 				item, err := s.Items.Create(ctx, c, workitems.NewItem{
 					Title: a.Title, Description: a.Description, Priority: a.Priority, DueAt: a.DueAt, ListID: a.ListID, Unowned: a.Unowned,
 				}, nil)
-				if err != nil || a.SuggestTo == "" {
+				if err == nil && a.SuggestTo == "" {
+					return s.Offers.StartNew(ctx, c, item)
+				}
+				if err != nil {
 					return item, err
 				}
 				return s.suggest(ctx, c, item, offers.Send{To: a.SuggestTo, Note: a.SuggestNote})
@@ -383,20 +386,22 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_advance",
-			description: "For agent teammates only. Finish your stage of a work item on a workflow, as work_get's workflow shows it: pass sends it to the next stage, or marks it done after the last; changes sends it back to the stage that fixes it, with a note saying what to fix. Use it instead of work_send when the item has a stage.",
+			description: "For agent teammates only. Finish your stage of a work item on a workflow, as work_get's workflow shows it: pass sends it to the next stage, or marks it done after the last; changes sends it back to the stage that fixes it, with a note saying what to fix. A pass may skip a stage whose skip_when holds: give to, a stage from the workflow's skip list, and say in the note why it holds. Use it instead of work_send when the item has a stage.",
 			action:      policy.ActionSend,
 			agentOnly:   true,
 			schema: object([]string{"id", "result", "note"}, map[string]any{
 				"id":     text(id),
 				"result": choice("pass when your stage's check is good, changes when something must be fixed first", offers.ResultPass, offers.ResultChanges),
-				"note":   text("What you did and found; with changes, what to fix"),
+				"note":   text("What you did and found; with changes, what to fix; with to, why the stages skipped don't apply"),
+				"to":     text("With pass: a later stage to go to instead of the next, from the workflow's skip list"),
 			}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				ID     string `json:"id"`
 				Result string `json:"result"`
 				Note   string `json:"note"`
+				To     string `json:"to"`
 			}) (any, error) {
-				return s.Offers.Advance(ctx, c, a.ID, a.Result, a.Note)
+				return s.Offers.Advance(ctx, c, a.ID, a.Result, a.Note, a.To)
 			}),
 		},
 		{

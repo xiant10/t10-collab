@@ -98,6 +98,7 @@ func (s *Server) routes() []route {
 		{"DELETE", "/v1/work-items/{id}", policy.ActionDelete, s.handleDeleteItem},
 		{"GET", "/v1/work-items/{id}/events", policy.ActionRead, s.handleItemEvents},
 		{"POST", "/v1/work-items/{id}/claim", policy.ActionWrite, s.handleClaim},
+		{"PUT", "/v1/work-items/{id}/list", policy.ActionWrite, s.handleSetList},
 		{"DELETE", "/v1/work-items/{id}/owners/me", policy.ActionWrite, s.handleStopOwning},
 		{"PUT", "/v1/work-items/{id}/collaborators/{user}", policy.ActionWrite, s.handleAddCollaborator},
 		{"DELETE", "/v1/work-items/{id}/collaborators/{user}", policy.ActionWrite, s.handleRemoveCollaborator},
@@ -123,6 +124,8 @@ func (s *Server) routes() []route {
 		{"DELETE", "/v1/lists/{id}/members/{user}", policy.ActionWrite, s.handleRemoveListMember},
 		{"PUT", "/v1/lists/{id}/workflow", policy.ActionWrite, s.handleSetWorkflow},
 		{"DELETE", "/v1/lists/{id}/workflow", policy.ActionWrite, s.handleRemoveWorkflow},
+		{"PUT", "/v1/lists/{id}/holding", policy.ActionWrite, s.handleHolding(true)},
+		{"DELETE", "/v1/lists/{id}/holding", policy.ActionWrite, s.handleHolding(false)},
 
 		{"GET", "/v1/people", policy.ActionRead, s.handlePeople},
 		{"GET", "/v1/units", policy.ActionRead, s.handleUnits},
@@ -319,6 +322,7 @@ func classify(err error) (status int, code, message string) {
 		{lists.ErrHolderNotAccepting, http.StatusUnprocessableEntity, "holder_not_accepting"},
 		{offers.ErrNotOnWorkflow, http.StatusConflict, "not_on_workflow"},
 		{offers.ErrNoWayBack, http.StatusConflict, "no_way_back"},
+		{offers.ErrCantSkip, http.StatusConflict, "cant_skip"},
 		{offers.ErrAlreadyOwner, http.StatusConflict, "already_owner"},
 		{offers.ErrItemClosed, http.StatusConflict, "item_closed"},
 		{offers.ErrOfferExists, http.StatusConflict, "offer_exists"},
@@ -369,6 +373,9 @@ func (s *Server) handleCreateItem(w http.ResponseWriter, r *http.Request, c poli
 		}
 	}
 	item, err := s.Items.Create(r.Context(), c, req.NewItem, after)
+	if err == nil && req.Send == nil {
+		item, err = s.Offers.StartNew(r.Context(), c, item)
+	}
 	if err != nil {
 		failure(w, r, err)
 		return
@@ -449,11 +456,12 @@ func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request, c policy.
 	var req struct {
 		Result string `json:"result"`
 		Note   string `json:"note"`
+		To     string `json:"to"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := s.Offers.Advance(r.Context(), c, r.PathValue("id"), req.Result, req.Note)
+	item, err := s.Offers.Advance(r.Context(), c, r.PathValue("id"), req.Result, req.Note, req.To)
 	if err != nil {
 		failure(w, r, err)
 		return
@@ -716,6 +724,43 @@ func (s *Server) handleSetWorkflow(w http.ResponseWriter, r *http.Request, c pol
 		return
 	}
 	writeJSON(w, http.StatusOK, wf)
+}
+
+// handleSetList puts an item on a list, or takes it off, and starts it there
+// when the list's workflow starts each new item.
+func (s *Server) handleSetList(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var req struct {
+		ListID string `json:"list_id"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	before, _, err := s.Items.Read(r.Context(), c, r.PathValue("id"))
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	item, err := s.Items.SetList(r.Context(), c, r.PathValue("id"), req.ListID)
+	if err == nil && item.ListID != before.ListID {
+		item, err = s.Offers.StartJoined(r.Context(), c, item)
+	}
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+// handleHolding is the caller agreeing to hold stages of a list's workflow, or
+// no longer.
+func (s *Server) handleHolding(agree bool) handler {
+	return func(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+		if err := s.Lists.SetHolding(r.Context(), c, r.PathValue("id"), agree); err != nil {
+			failure(w, r, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func (s *Server) handleRemoveWorkflow(w http.ResponseWriter, r *http.Request, c policy.Caller) {
