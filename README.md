@@ -98,12 +98,13 @@ Tests need a throwaway Postgres, because they drop the `collab` schema. Without 
 | `internal/sweep` | The 15-minute job: team-linked lists, and moving work from people who leave |
 | `internal/policy` | Every access rule, tenant settings, and the SQL filter for "items this user can see" |
 | `internal/activity` | Item history and in-app notifications |
+| `internal/roles` | Who administers collab: tenant admins, and holders of `work:admin` from `auth-server` |
 | `third_party/t10-modkit/people` | Org reads from the auth service. They fail closed |
 | `internal/server` | HTTP routes, with the required action declared on each one, and the agent tools in `mcp.go` |
 | `verifier` | Copied from `auth-server`, which has no remote to import from. Keep the two identical |
 | `docs/openapi.yaml` | The API. A test keeps it in step with the routes |
 
-This service meets the module contract in `../contracts/module/README.md`. Clients find it through `GET /v1/module`, and `GET /internal/v1/attention` answers only `t10-notify`'s service token.
+This service meets the module contract in `../contracts/module/README.md`. `permissions.yaml` is its entry in the auth service's permission catalog: one permission, `work:admin`, which makes a member collab's admin without tenant admin rights, and a "Task administrator" template. The workspace deploys a copy as `deploy/k8s/catalog/collab/collab.yaml`; keep the two the same. Clients find it through `GET /v1/module`, and `GET /internal/v1/attention` answers only `t10-notify`'s service token.
 
 A forbidden item answers `404`, the same as a missing one. A caller who can see an item, but can't do what they asked, gets `403`.
 

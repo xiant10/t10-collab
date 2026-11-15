@@ -19,6 +19,7 @@ import (
 	"t10-collab/internal/events"
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
+	"t10-collab/internal/roles"
 	"t10-collab/internal/server"
 	"t10-collab/internal/sweep"
 	"t10-collab/internal/telemetry"
@@ -70,7 +71,7 @@ func run() error {
 	org := people.New(people.Options{URL: cfg.AuthURL, ClientID: cfg.ClientID, ClientSecret: cfg.ClientSecret})
 	items := workitems.NewService(pool, org)
 	api := server.New(server.Deps{
-		Pool: pool, Verifier: tokens, Org: org, Items: items,
+		Pool: pool, Verifier: tokens, Org: org, Admins: roles.New(cfg.AuthURL, org.ServiceToken, org), Items: items,
 		Offers: offers.NewService(pool, org, items), Lists: lists.NewService(pool, org), Activity: activity.NewService(pool),
 	})
 	go sweep.New(pool, org).Run(ctx)
