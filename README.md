@@ -16,7 +16,7 @@ Multi-tenant task and work item collaboration service for the t10 platform.
 
 ## Status
 
-Built and in use. Workbench is its client, and agents reach it over MCP at `/mcp`. [`docs/design.md`](docs/design.md) describes it as built, and [`docs/workflows.md`](docs/workflows.md) covers list workflows.
+Built and in use. Workbench is its client, and agents reach it over MCP at `/mcp`. [`docs/design.md`](docs/design.md) describes it as built, [`docs/workflows.md`](docs/workflows.md) covers list workflows, [`docs/api.md`](docs/api.md) is the API reference for routes, agent tools and the events it posts, and [`docs/development.md`](docs/development.md) is for developers changing it.
 
 ### Changes from the design
 

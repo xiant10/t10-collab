@@ -26,7 +26,9 @@ func (v teammates) Verify(ctx context.Context, raw string) (*verifier.Identity, 
 	if account, ok := strings.CutPrefix(raw, "teammate:"); ok {
 		who := grantOf(policy.ActionRead, policy.ActionWrite, policy.ActionSend)
 		if account, grant, ok := strings.Cut(account, "@"); ok {
+			// The harness's own grant is a child of the grant the run was started with.
 			who.UserID, who.Agent.GrantID = account, grant
+			who.Agent.Chain = []verifier.Link{{ID: grant + "_run", Actions: who.Scopes}, {ID: grant, Actions: who.Scopes}}
 			return who, nil
 		}
 		who.UserID = account
@@ -320,6 +322,15 @@ func TestAnItemsFormerHolderIsToldNotWoken(t *testing.T) {
 	next := call(t, ts.URL, "teammate:acc_lead@grt_build", "work_send", map[string]any{"id": item, "to": "acc_close", "note": "please review", "mode": "transfer"})
 	if next.failed {
 		t.Fatalf("send: %+v", next)
+	}
+	// The send carries the builder's grant chain, so t10-automations finds the run that sent it.
+	var chain []string
+	if err := h.pool.QueryRow(context.Background(),
+		"SELECT cause_chain FROM collab.outbox WHERE for_user_id = 'acc_close' ORDER BY seq DESC LIMIT 1").Scan(&chain); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(chain, []string{"grt_build_run", "grt_build"}) {
+		t.Errorf("cause chain: %v", chain)
 	}
 	h.clearOutbox()
 	// A reviewer may comment before it accepts: the builder has offered the item on.

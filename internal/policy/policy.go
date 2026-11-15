@@ -38,6 +38,8 @@ type Caller struct {
 	UserID   string
 	// GrantID is set when an agent is acting for the person, and goes on the record.
 	GrantID string
+	// GrantChain is the agent's grants, root first, ending with GrantID.
+	GrantChain []string
 }
 
 // Relation is everything about a caller that access to one item depends on.

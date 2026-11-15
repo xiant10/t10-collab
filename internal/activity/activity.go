@@ -80,9 +80,9 @@ func Record(ctx context.Context, tx pgx.Tx, c policy.Caller, ch Change) error {
 			hops = max(sends, comments)
 		}
 		_, err = tx.Exec(ctx,
-			`INSERT INTO collab.outbox (tenant_id, id, event_id, kind, item_id, for_user_id, actor_user_id, cause_grant_id, hops)
-			 VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, NULLIF($8, ''), $9)`,
-			c.TenantID, ids.New("obx"), eventID, kind, ch.ItemID, userID, c.UserID, c.GrantID, max(hops, 0))
+			`INSERT INTO collab.outbox (tenant_id, id, event_id, kind, item_id, for_user_id, actor_user_id, cause_grant_id, cause_chain, hops)
+			 VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, NULLIF($8, ''), $9, $10)`,
+			c.TenantID, ids.New("obx"), eventID, kind, ch.ItemID, userID, c.UserID, c.GrantID, causeChain(c), max(hops, 0))
 		if err != nil {
 			return fmt.Errorf("write outbox: %w", err)
 		}
@@ -356,4 +356,13 @@ func (s *Service) MarkRead(ctx context.Context, c policy.Caller, notificationIDs
 		return fmt.Errorf("mark read: %w", err)
 	}
 	return nil
+}
+
+// causeChain is the grants of the run that caused a change, root first, or none
+// when a person made it.
+func causeChain(c policy.Caller) []string {
+	if c.GrantID == "" || c.GrantChain == nil {
+		return []string{}
+	}
+	return c.GrantChain
 }
