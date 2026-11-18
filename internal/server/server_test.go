@@ -35,12 +35,13 @@ type tokens struct{}
 
 func (tokens) Verify(_ context.Context, raw string) (*verifier.Identity, error) {
 	switch raw {
+	// A service token's subject is svc_ and its name, as auth-server issues it.
 	case "service":
-		return &verifier.Identity{ServiceID: "other"}, nil
+		return &verifier.Identity{ServiceID: "svc_other"}, nil
 	case "notify":
-		return &verifier.Identity{ServiceID: notifyService}, nil
+		return &verifier.Identity{ServiceID: "svc_" + notifyService}, nil
 	case "t10-sales", "t10-property":
-		return &verifier.Identity{ServiceID: raw}, nil
+		return &verifier.Identity{ServiceID: "svc_" + raw}, nil
 	case "platform-admin":
 		return &verifier.Identity{UserID: "usr_root"}, nil
 	case "agent":
