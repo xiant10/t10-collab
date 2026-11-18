@@ -110,6 +110,55 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Type"}
         default: {$ref: "#/components/responses/Error"}
+  /internal/v1/events:
+    get:
+      summary: The events about one module's typed items, for that module
+      description: >-
+        Only the module's own service token, t10-<module>, can call this. Events from every tenant, oldest
+        first, paged by an <xid>.<seq> cursor that stops short of any transaction still running, so a slow
+        commit arrives late rather than never. Keep the last cursor and pass it as after. See docs/types.md.
+      operationId: moduleEvents
+      parameters:
+        - {name: module, in: query, required: true, schema: {type: string}}
+        - {name: after, in: query, schema: {type: string}, description: "The last cursor read; empty from the start"}
+        - {$ref: "#/components/parameters/limit"}
+      responses:
+        "200":
+          description: One page, and the cursor to pass next, which stays put when there's nothing new
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        cursor: {type: string}
+                        id: {type: string}
+                        tenant: {type: string}
+                        kind: {type: string}
+                        item_id: {type: string}
+                        type: {type: string}
+                        actor: {type: string}
+                        actor_grant: {type: string}
+                        detail: {type: object, description: "As in the item's history: a move's from_state, to_state, note and payload"}
+                        at: {type: string, format: date-time}
+                        item:
+                          type: object
+                          description: The item as it is when the feed is read; left out once it's deleted
+                          properties:
+                            title: {type: string}
+                            status: {$ref: "#/components/schemas/Status"}
+                            state: {type: string}
+                            fields: {type: object}
+                            subject_ref: {type: string}
+                            creator_id: {type: string}
+                            owners: {type: array, items: {type: string}}
+                            version: {type: integer}
+                  next: {type: string}
+        default: {$ref: "#/components/responses/Error"}
   /v1/types:
     get:
       summary: The item types in the caller's tenant, collab.task first

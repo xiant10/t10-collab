@@ -141,6 +141,7 @@ These need a tenant admin, or a member holding `work:admin` from `auth-server`.
 | `GET /v1/module` | The manifest: `id: collab`, `api_version: 1`, `action_prefix: work`, `features`, and `trigger_events`, the event kinds automations can fire on |
 | `GET /internal/v1/attention?tenant=&user=&since=` | Counts for `t10-notify`'s digest, such as offers to answer and items overdue, with no titles or names. Only `t10-notify`'s service token may call it |
 | `PUT /internal/v1/types/{type}` | A module declares an [item type](types.md). Only the owning module's service token, `t10-<module>`, may call it |
+| `GET /internal/v1/events?module=&after=&limit=` | The events about a module's [typed items](types.md#telling-the-owning-module), from every tenant, for that module's service token only |
 
 ## Agent tools (MCP)
 

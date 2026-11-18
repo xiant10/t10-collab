@@ -2,7 +2,7 @@
 
 A module whose work is a request between people can keep it in collab as a **typed item**, instead of building its own offers, inboxes, history, notifications and departures. The module declares the type; collab checks the declaration and runs no module code. An item with no type is `collab.task` and behaves as it always has.
 
-The design and the steps still to come are in the workspace's [`proposals/collab-item-types.md`](../../proposals/collab-item-types.md). This page is what's built: steps 1 and 2.
+The design and the steps still to come are in the workspace's [`proposals/collab-item-types.md`](../../proposals/collab-item-types.md). This page is what's built: steps 1 to 3.
 
 ## What a type gives an item
 
@@ -13,7 +13,8 @@ The design and the steps still to come are in the workspace's [`proposals/collab
 | `visibility` | `team`, `participants` | Who reads it. `scoped` waits for scoped entitlements |
 | `departure` | Yes | What the sweep does once all its owners have left |
 | `states`, `offers`, `transitions` | Yes | A lifecycle of its own: see [States and moves](#states-and-moves) |
-| Event feed, tenant versions, `scoped` | No | Steps 3 to 5 |
+| Event feed | Yes | The owning module reads every change to its items: see [Telling the owning module](#telling-the-owning-module) |
+| Tenant versions, `scoped` | No | Steps 4 and 5 |
 
 ## Declaring a type
 
@@ -83,6 +84,30 @@ A type with `states` gives its items a lifecycle. Each state has a `phase`, one 
 Every state change is one `item.state_changed` event with `from_state`, `to_state`, `status_from`, `status_to`, and `transition` or `offer_event`, plus any `note` and `payload`. Everyone on the item and its creator are told. A move into a closed phase ends its pending offers.
 
 Agents take transitions with `work_transition`, which serves agent teammates only, like `work_send`. An assistant acting for a person reads and drafts, and the person makes the move.
+
+## Telling the owning module
+
+The module **pulls** the changes to its own types' items, from every tenant:
+
+```http
+GET /internal/v1/events?module=sales&after=<cursor>&limit=200
+Authorization: Bearer <t10-sales service token>
+```
+
+```json
+{"events": [{"cursor": "7712.4031", "id": "evt_…", "tenant": "ten_…", "kind": "item.state_changed",
+             "item_id": "wi_…", "type": "sales.presales", "actor": "usr_…", "at": "…",
+             "detail": {"transition": "deliver", "from_state": "accepted", "to_state": "delivered", "payload": {"reply": "…"}},
+             "item": {"title": "…", "status": "doing", "state": "delivered", "fields": {"what": "…"}, "subject_ref": "sales:deal:d_12",
+                      "creator_id": "usr_…", "owners": ["usr_…"], "version": 6}}],
+ "next": "7712.4031"}
+```
+
+- Only `t10-<module>`'s service token reads `module=<module>`, and the feed holds that module's types only. It carries field values, because the module declared those fields and holds their source.
+- `detail` is the event as the item's history has it. `item` is the item **as it is when the feed is read**, not as it was at the event, and it's left out once the item is deleted.
+- The cursor is `<xid>.<seq>`, as the notification feed's, and reads stop short of any transaction still running, so a slow commit is delivered late, never skipped. Keep `next` and pass it as `after`; with nothing new it stays put. Save the cursor after acting on an event: a module that stops in between reads the event again, so it acts once per event `id`.
+- Collab never calls the module, and needs no broker. A module that's down catches up from its cursor.
+- `collab.events` holds `module`, set from the item's type as each event is written, so the feed is one indexed read. Events written before step 3 have none.
 
 ## Visibility
 

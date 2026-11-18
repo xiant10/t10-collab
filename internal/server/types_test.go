@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -596,4 +597,133 @@ func TestAStateALaterVersionRemovedCanOnlyBeCancelled(t *testing.T) {
 	}
 	h.wantError("ada", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "review"}, http.StatusConflict, "transition_not_allowed")
 	h.want("ada", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "cancel"}, http.StatusOK)
+}
+
+// feed reads a module's events with a service token, from a cursor.
+func (h *harness) feed(token, module, after string, limit int) (int, []map[string]any, string) {
+	h.t.Helper()
+	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/internal/v1/events?module=%s&after=%s&limit=%d", h.url, module, after, limit), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Events []map[string]any `json:"events"`
+		Next   string           `json:"next"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out.Events, out.Next
+}
+
+func (h *harness) feedAll(module string) ([]map[string]any, string) {
+	h.t.Helper()
+	all, cursor := []map[string]any{}, ""
+	for {
+		status, events, next := h.feed("t10-"+module, module, cursor, 2)
+		if status != http.StatusOK {
+			h.t.Fatalf("feed = %d", status)
+		}
+		all, cursor = append(all, events...), next
+		if len(events) < 2 {
+			return all, cursor
+		}
+	}
+}
+
+func TestAModuleReadsOnlyItsOwnEvents(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	ask := h.ask("ada")
+	h.want("bob", "POST", "/v1/offers/"+h.send("ada", ask, "bob", "transfer")+"/accept", nil, http.StatusOK)
+	h.want("bob", "POST", "/v1/work-items/"+ask+"/transition", map[string]any{"transition": "deliver", "payload": map[string]any{"reply": "Done"}}, http.StatusOK)
+	follow := h.typed("ada", map[string]any{"type": "property.followup"})
+	h.item("ada")
+
+	for token, want := range map[string]int{"t10-property": http.StatusForbidden, acme + "/ada": http.StatusForbidden, "garbage": http.StatusUnauthorized} {
+		if got, _, _ := h.feed(token, "sales", "", 50); got != want {
+			t.Errorf("%s reading sales = %d, want %d", token, got, want)
+		}
+	}
+	for _, module := range []string{"collab", "Sales", ""} {
+		if got, _, _ := h.feed("t10-sales", module, "", 50); got != http.StatusBadRequest {
+			t.Errorf("module %q = %d", module, got)
+		}
+	}
+	if got, _, _ := h.feed("t10-sales", "sales", "nonsense", 50); got != http.StatusBadRequest {
+		t.Errorf("a bad cursor = %d", got)
+	}
+
+	events, cursor := h.feedAll("sales")
+	kinds := []string{}
+	for _, e := range events {
+		if e["item_id"] != ask || e["tenant"] != acme || e["type"] != "sales.presales" {
+			t.Fatalf("sales feed holds %v", e)
+		}
+		kinds = append(kinds, e["kind"].(string))
+	}
+	if want := []string{"item.created", "offer.sent", "item.state_changed", "item.state_changed", "offer.accepted", "item.state_changed"}; !slices.Equal(kinds, want) {
+		t.Errorf("kinds = %v, want %v", kinds, want)
+	}
+	last := events[len(events)-1]
+	if last["detail"].(map[string]any)["payload"].(map[string]any)["reply"] != "Done" || last["item"].(map[string]any)["state"] != "delivered" ||
+		last["item"].(map[string]any)["fields"].(map[string]any)["what"] != "A deck" {
+		t.Errorf("last event = %v", last)
+	}
+	// Caught up, the cursor stays put.
+	if _, more, next := h.feed("t10-sales", "sales", cursor, 50); len(more) != 0 || next != cursor {
+		t.Errorf("after the end: %v, %q", more, next)
+	}
+	property, _ := h.feedAll("property")
+	if len(property) != 1 || property[0]["item_id"] != follow {
+		t.Errorf("property feed = %v", property)
+	}
+}
+
+func TestTheFeedWaitsForASlowCommit(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	first := h.ask("ada")
+	_, cursor := h.feedAll("sales")
+
+	// A transaction that started first, but commits after a later one.
+	ctx := context.Background()
+	slow, err := h.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Rollback(ctx) //nolint:errcheck
+	if _, err := slow.Exec(ctx,
+		`INSERT INTO collab.events (tenant_id, id, item_id, actor_user_id, kind, module) VALUES ($1, 'evt_slow', $2, 'ada', 'comment.added', 'sales')`,
+		acme, first); err != nil {
+		t.Fatal(err)
+	}
+	h.ask("bob")
+	if _, events, next := h.feed("t10-sales", "sales", cursor, 50); len(events) != 0 || next != cursor {
+		t.Fatalf("read past a running transaction: %v", events)
+	}
+	if err := slow.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, events, _ := h.feed("t10-sales", "sales", cursor, 50)
+	if len(events) != 2 || events[0]["id"] != "evt_slow" || events[1]["kind"] != "item.created" {
+		t.Fatalf("after the commit: %v", events)
+	}
+}
+
+func TestADeletedItemsEventsCarryNoItem(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	ask := h.ask("ada")
+	h.want("ada", "DELETE", "/v1/work-items/"+ask, nil, http.StatusNoContent)
+	events, _ := h.feedAll("sales")
+	if len(events) != 2 || events[1]["kind"] != "item.deleted" {
+		t.Fatalf("events = %v", events)
+	}
+	for _, e := range events {
+		if _, has := e["item"]; has {
+			t.Errorf("a deleted item's event shows it: %v", e)
+		}
+	}
 }

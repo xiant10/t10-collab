@@ -40,6 +40,8 @@ const (
 	attentionRoute = "/internal/v1/attention"
 	// typeRoute is where an owning module pushes its item types.
 	typeRoute = "/internal/v1/types/{type}"
+	// feedRoute is where an owning module reads the events about its types.
+	feedRoute = "/internal/v1/events"
 	// attentionWindow is how far back counts look when a caller names no time.
 	attentionWindow = 24 * time.Hour
 )
@@ -180,6 +182,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleAttention)))
 	key = "PUT " + typeRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handlePutType)))
+	key = "GET " + feedRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleModuleFeed)))
 	key = "POST " + mcpRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleMCP)))
 	return logged(mux)
@@ -257,18 +261,8 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 // with that module's service token. Errors carry their detail, because they
 // describe the module's own declaration, never a record.
 func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	service, ok := s.service(w, r)
 	if !ok {
-		unauthorized(w)
-		return
-	}
-	who, err := s.Verifier.Verify(r.Context(), raw)
-	if err != nil {
-		unauthorized(w)
-		return
-	}
-	if who.ServiceID == "" {
-		writeError(w, http.StatusForbidden, "forbidden", "this token can't use this route")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
@@ -282,7 +276,7 @@ func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
 	}
 	var t types.Type
 	if err == nil {
-		t, err = s.Types.Put(r.Context(), who.ServiceID, d)
+		t, err = s.Types.Put(r.Context(), service, d)
 	}
 	switch {
 	case errors.Is(err, types.ErrInvalid):
@@ -298,6 +292,55 @@ func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, t)
 	}
+}
+
+// service admits a service's own token, and returns the service's name.
+func (s *Server) service(w http.ResponseWriter, r *http.Request) (string, bool) {
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		unauthorized(w)
+		return "", false
+	}
+	who, err := s.Verifier.Verify(r.Context(), raw)
+	if err != nil {
+		unauthorized(w)
+		return "", false
+	}
+	if who.ServiceID == "" {
+		writeError(w, http.StatusForbidden, "forbidden", "this token can't use this route")
+		return "", false
+	}
+	return who.ServiceID, true
+}
+
+// handleModuleFeed gives a module the events about its own types' items, in
+// every tenant, with field values: the module declared the fields and holds
+// their source, so the feed shows it nothing it doesn't own the meaning of.
+// Only the module's own service token, t10-<module>, may read it.
+func (s *Server) handleModuleFeed(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service(w, r)
+	if !ok {
+		return
+	}
+	module := r.URL.Query().Get("module")
+	if types.Module(module+".x") == "" || module == "collab" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name a module")
+		return
+	}
+	if service != "t10-"+module {
+		writeError(w, http.StatusForbidden, "forbidden", "a module reads only its own events")
+		return
+	}
+	n, ok := limit(w, r)
+	if !ok {
+		return
+	}
+	events, next, err := s.Activity.ModuleFeed(r.Context(), module, r.URL.Query().Get("after"), n)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events, "next": next})
 }
 
 func (s *Server) handleListTypes(w http.ResponseWriter, r *http.Request, c policy.Caller) {
