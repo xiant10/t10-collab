@@ -1,3 +1,11 @@
+---
+title: "Team Collaboration Design"
+audience: contributor
+kind: design
+status: current
+summary: "Team collaboration as built: work items, offers, lists and agent teammates, and why."
+---
+
 # Team Collaboration Design
 
 Oct 31, 2026 · @Felix Liang · Rewritten Nov 14, 2026 to describe what's built

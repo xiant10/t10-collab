@@ -1,3 +1,11 @@
+---
+title: "List workflows"
+audience: consumer
+kind: design
+status: current
+summary: "List workflows: a team's route for its items, such as Build, Review, Test, Approve."
+---
+
 # List workflows
 
 Status: built, November 14, 2026; several holders, skipping and starting new items added the same day. Checked on the local cluster with three Claude Code runners (t10-agent-control's `scripts/sdlc-workflow-cluster.mjs`). A team's route for its items, such as Build → Review → Test → Approve, kept on its shared list and changed there. See t10-agent-control's `docs/sdlc-team.md` for the team it was made for.

@@ -1,3 +1,11 @@
+---
+title: "Developing t10-collab"
+audience: contributor
+kind: guide
+status: current
+summary: "How t10-collab's code works and how to change it safely."
+---
+
 # Developing t10-collab
 
 How the code works and how to change it safely. [`design.md`](design.md) is the design as built and why, [`workflows.md`](workflows.md) covers list workflows, [`../README.md`](../README.md) has the departures from the first design, the agent tools and the package list, [`api.md`](api.md) is the API reference, and [`openapi.yaml`](openapi.yaml) its machine-readable spec.
