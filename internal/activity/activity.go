@@ -343,7 +343,17 @@ type ModuleItem struct {
 	SubjectRef string         `json:"subject_ref,omitempty"`
 	CreatorID  string         `json:"creator_id"`
 	Owners     []string       `json:"owners"`
-	Version    int            `json:"version"`
+	DueAt      *time.Time     `json:"due_at"`
+	// PendingOffers are who the item is offered to now, oldest first.
+	PendingOffers []PendingOffer `json:"pending_offers"`
+	Version       int            `json:"version"`
+}
+
+// PendingOffer is an offer on a module's item that nobody has answered.
+type PendingOffer struct {
+	ID       string `json:"id"`
+	ToUserID string `json:"to_user_id"`
+	Mode     string `json:"mode"`
 }
 
 // ModuleFeed returns the events about one module's typed items, across
@@ -359,7 +369,10 @@ func (s *Service) ModuleFeed(ctx context.Context, module, cursor string, limit i
 	rows, err := s.pool.Query(ctx,
 		`SELECT e.xid::text, e.seq, e.id, e.tenant_id, e.kind, e.item_id, i.type, e.actor_user_id, COALESCE(e.actor_grant_id, ''), e.detail, e.at,
 		        i.deleted_at IS NOT NULL, i.title, i.status, COALESCE(i.state, ''), i.fields, COALESCE(i.subject_ref, ''), i.creator_id, i.version,
-		        ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id)
+		        ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id),
+		        i.due_at,
+		        COALESCE((SELECT jsonb_agg(jsonb_build_object('id', f.id, 'to_user_id', f.to_user_id, 'mode', f.mode) ORDER BY f.created_at, f.id)
+		                  FROM collab.offers f WHERE f.tenant_id = i.tenant_id AND f.item_id = i.id AND f.state = 'pending'), '[]')
 		 FROM collab.events e
 		 JOIN collab.work_items i ON i.tenant_id = e.tenant_id AND i.id = e.item_id
 		 WHERE e.module = $1
@@ -378,7 +391,8 @@ func (s *Service) ModuleFeed(ctx context.Context, module, cursor string, limit i
 		var deleted bool
 		var item ModuleItem
 		err := row.Scan(&rowXID, &rowSeq, &e.ID, &e.TenantID, &e.Kind, &e.ItemID, &e.Type, &e.ActorUserID, &e.ActorGrantID, &e.Detail, &e.At,
-			&deleted, &item.Title, &item.Status, &item.State, &item.Fields, &item.SubjectRef, &item.CreatorID, &item.Version, &item.Owners)
+			&deleted, &item.Title, &item.Status, &item.State, &item.Fields, &item.SubjectRef, &item.CreatorID, &item.Version, &item.Owners,
+			&item.DueAt, &item.PendingOffers)
 		e.Cursor = rowXID + "." + strconv.FormatInt(rowSeq, 10)
 		next = e.Cursor
 		if !deleted {

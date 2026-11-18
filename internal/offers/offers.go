@@ -102,6 +102,16 @@ type Offer struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	// ExpiresAt is set only on an offer holding a departed owner's item.
 	ExpiresAt *time.Time `json:"expires_at"`
+	// Item is where the answer left the item, given only by accept and
+	// decline: someone who declines may no longer read it.
+	Item *Answered `json:"item,omitempty"`
+}
+
+// Answered is an item as an answer to its offer left it.
+type Answered struct {
+	Status  string `json:"status"`
+	State   string `json:"state,omitempty"`
+	Version int    `json:"version"`
 }
 
 // Send describes one send.
@@ -532,6 +542,16 @@ func answer(ctx context.Context, tx pgx.Tx, c policy.Caller, id string) (Offer, 
 	return o, nil
 }
 
+// answered reads the item an answer leaves, under the lock the answer holds.
+func answered(ctx context.Context, tx pgx.Tx, tenantID string, o *Offer) error {
+	item, err := workitems.LockRow(ctx, tx, tenantID, o.ItemID)
+	if err != nil {
+		return err
+	}
+	o.Item = &Answered{Status: item.Status, State: item.State, Version: item.Version}
+	return nil
+}
+
 // Accept moves ownership to the recipient.
 func (s *Service) Accept(ctx context.Context, c policy.Caller, id string) (Offer, error) {
 	var o Offer
@@ -553,9 +573,12 @@ func (s *Service) Accept(ctx context.Context, c policy.Caller, id string) (Offer
 		if err != nil {
 			return err
 		}
-		return activity.Record(ctx, tx, c, activity.Change{
+		if err := activity.Record(ctx, tx, c, activity.Change{
 			ItemID: o.ItemID, Kind: "offer.accepted", Detail: map[string]any{"offer_id": o.ID, "mode": o.Mode}, Notify: append(notify, o.FromUserID),
-		})
+		}); err != nil {
+			return err
+		}
+		return answered(ctx, tx, c.TenantID, &o)
 	})
 	if err != nil {
 		return Offer{}, err
@@ -582,8 +605,10 @@ func (s *Service) Decline(ctx context.Context, c policy.Caller, id, note string)
 		}); err != nil {
 			return err
 		}
-		_, err = workitems.OfferMove(ctx, tx, c, o.ItemID, types.OfferDecline, o.Mode, note)
-		return err
+		if _, err := workitems.OfferMove(ctx, tx, c, o.ItemID, types.OfferDecline, o.Mode, note); err != nil {
+			return err
+		}
+		return answered(ctx, tx, c.TenantID, &o)
 	})
 	if err != nil {
 		return Offer{}, err

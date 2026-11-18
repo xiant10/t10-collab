@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The two fixture types stand in for real modules: a request only its
@@ -272,12 +274,19 @@ func TestOnlyParticipantsReadAParticipantsItem(t *testing.T) {
 	// The recipient reads it while the offer is pending, and not after declining.
 	offer := h.send("ada", ask, "bob", "transfer")
 	h.want("bob", "GET", "/v1/work-items/"+ask, nil, http.StatusOK)
-	h.want("bob", "POST", "/v1/offers/"+offer+"/decline", map[string]any{"note": "busy"}, http.StatusOK)
+	// The decline says where it left the item, as bob can't read it after.
+	declined := h.want("bob", "POST", "/v1/offers/"+offer+"/decline", map[string]any{"note": "busy"}, http.StatusOK)
+	if item, _ := declined["item"].(map[string]any); declined["state"] != "declined" || item["state"] != "declined" || item["status"] != "cancelled" || item["version"] == nil {
+		t.Errorf("decline = %v", declined)
+	}
 	h.wantError("bob", "GET", "/v1/work-items/"+ask, nil, http.StatusNotFound, "not_found")
 
 	// Accepted, bob owns it, and his manager carol still can't read it.
 	ask = h.ask("ada")
-	h.want("bob", "POST", "/v1/offers/"+h.send("ada", ask, "bob", "transfer")+"/accept", nil, http.StatusOK)
+	accepted := h.want("bob", "POST", "/v1/offers/"+h.send("ada", ask, "bob", "transfer")+"/accept", nil, http.StatusOK)
+	if item, _ := accepted["item"].(map[string]any); item["state"] != "accepted" || item["status"] != "doing" {
+		t.Errorf("accept = %v", accepted)
+	}
 	h.want("bob", "GET", "/v1/work-items/"+ask, nil, http.StatusOK)
 	h.want("ada", "GET", "/v1/work-items/"+ask, nil, http.StatusOK) // the creator
 	h.wantError("carol", "GET", "/v1/work-items/"+ask, nil, http.StatusNotFound, "not_found")
@@ -678,6 +687,37 @@ func TestAModuleReadsOnlyItsOwnEvents(t *testing.T) {
 	property, _ := h.feedAll("property")
 	if len(property) != 1 || property[0]["item_id"] != follow {
 		t.Errorf("property feed = %v", property)
+	}
+}
+
+func TestTheFeedShowsWhoAnItemIsOfferedTo(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	ask := h.typed("ada", map[string]any{"type": "sales.presales", "due_at": "2026-12-01T09:00:00Z", "fields": map[string]any{"what": "A deck", "for_whom": "boss"}})
+	first := h.send("ada", ask, "bob", "share")
+	second := h.send("ada", ask, "dan", "transfer")
+
+	events, _ := h.feedAll("sales")
+	item := events[len(events)-1]["item"].(map[string]any)
+	if due, _ := time.Parse(time.RFC3339, fmt.Sprint(item["due_at"])); !due.Equal(time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)) {
+		t.Errorf("due_at = %v", item["due_at"])
+	}
+	want := []any{
+		map[string]any{"id": first, "to_user_id": "bob", "mode": "share"},
+		map[string]any{"id": second, "to_user_id": "dan", "mode": "transfer"},
+	}
+	if !reflect.DeepEqual(item["pending_offers"], want) {
+		t.Errorf("pending_offers = %v, want %v", item["pending_offers"], want)
+	}
+
+	// Answered, the offers leave, and the feed shows it on every event.
+	h.want("bob", "POST", "/v1/offers/"+first+"/decline", nil, http.StatusOK)
+	h.want("dan", "POST", "/v1/offers/"+second+"/decline", map[string]any{"note": "Not mine"}, http.StatusOK)
+	events, _ = h.feedAll("sales")
+	for _, e := range events {
+		if got := e["item"].(map[string]any)["pending_offers"]; !reflect.DeepEqual(got, []any{}) {
+			t.Errorf("%s: pending_offers = %v", e["kind"], got)
+		}
 	}
 }
 

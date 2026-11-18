@@ -85,6 +85,8 @@ A send to an agent account needs that account's intake to allow the sender, or i
 
 An offer's `state` is one of `pending`, `assigned`, `accepted`, `declined`, `withdrawn`, `voided` (the item changed hands another way) or `expired`. Only offers holding a departed owner's item expire, after 14 days.
 
+Accept and decline answer with the offer and `item`: the item's `status`, `state` and `version` as the answer left it. Someone who declines an item they could see only through the offer can't read it afterwards, so this is how they learn what became of it.
+
 ## Workflows
 
 A list may carry a workflow: stages, each with holders, that items move through. [`workflows.md`](workflows.md) has the rules.
