@@ -238,7 +238,7 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 		unauthorized(w)
 		return
 	}
-	if who.ServiceID != notifyService {
+	if serviceName(who) != notifyService {
 		writeError(w, http.StatusForbidden, "forbidden", "this token can't use this route")
 		return
 	}
@@ -347,7 +347,13 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) (string, bool) 
 		writeError(w, http.StatusForbidden, "forbidden", "this token can't use this route")
 		return "", false
 	}
-	return who.ServiceID, true
+	return serviceName(who), true
+}
+
+// serviceName is a service token's account name. auth-server's subject for a
+// service is svc_ and its name, such as svc_t10-notify.
+func serviceName(who *verifier.Identity) string {
+	return strings.TrimPrefix(who.ServiceID, "svc_")
 }
 
 // handleModuleFeed gives a module the events about its own types' items, in
