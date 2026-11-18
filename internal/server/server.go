@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/xiant10/t10-modkit/docsmcp"
 	"github.com/xiant10/t10-modkit/page"
 	"github.com/xiant10/t10-modkit/people"
 
@@ -87,6 +88,8 @@ type Deps struct {
 	Lists    *lists.Service
 	Activity *activity.Service
 	Types    *types.Store
+	// Docs, when set, serves this repo's docs at /docs/mcp. See Docs.
+	Docs http.Handler
 }
 
 // Server handles the API.
@@ -192,6 +195,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleModuleFeed)))
 	key = "POST " + mcpRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleMCP)))
+	if s.Docs != nil {
+		// Every method, so the handler answers 405 for the ones it doesn't take.
+		mux.Handle(docsmcp.Route, telemetry.Wrap("POST "+docsmcp.Route, s.Docs))
+	}
 	return logged(mux)
 }
 

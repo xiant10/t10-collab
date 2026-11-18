@@ -63,6 +63,35 @@ paths:
           description: tools/call had no valid token
         "403":
           description: A browser's request, or a token that isn't delegated
+  /docs/mcp:
+    post:
+      summary: This repo's docs, over MCP
+      description: >
+        The docs contract in the t10 workspace (contracts/docs): one JSON-RPC
+        message per request, with no session, no stream and no token. It serves
+        docs_overview, docs_search, docs_read, docs_api and docs_agent_tools, and
+        each doc as a resource, from the docs for people building on t10 that the
+        image carries. Other methods answer 405.
+      operationId: postDocsMcp
+      security:
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses:
+        "200":
+          description: A JSON-RPC response
+          content:
+            application/json:
+              schema: {type: object}
+        "202":
+          description: A notification was accepted
+        "400":
+          description: The body isn't a JSON-RPC message
+        "403":
+          description: A browser's request
   /internal/v1/attention:
     get:
       summary: What needs one person, as counts
