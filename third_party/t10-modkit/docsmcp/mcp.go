@@ -1,14 +1,18 @@
 package docsmcp
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Route is where every image serves its docs.
@@ -400,3 +404,72 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeError(w http.ResponseWriter, status int, id json.RawMessage, code int, msg string) {
 	writeJSON(w, status, map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": msg}})
 }
+
+// Wrap answers Route with the docs and passes every other request to next, so an
+// image mounts its docs in front of its own handler.
+func (h *Handler) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == Route {
+			h.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// DocsOnly serves only Route when the command runs as "<command> docs <addr>",
+// with no database or other service, for the docs contract's suite. It answers
+// whether it did; when it did, the error is why it stopped.
+func DocsOnly(args []string, h *Handler) (bool, error) {
+	if len(args) != 3 || args[1] != "docs" {
+		return false, nil
+	}
+	srv := &http.Server{Addr: args[2], Handler: h.Wrap(http.NotFoundHandler()), ReadHeaderTimeout: 5 * time.Second}
+	return true, srv.ListenAndServe()
+}
+
+// ServeStdio answers the same messages over stdio, one JSON object per line, for
+// a command-line tool that has no server.
+func (h *Handler) ServeStdio(in io.Reader, out io.Writer) error {
+	scanner := bufio.NewScanner(in)
+	scanner.Buffer(make([]byte, 0, maxBody), maxBody)
+	enc := json.NewEncoder(out)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var m message
+		if err := json.Unmarshal(line, &m); err != nil {
+			if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{"code": parseError, "message": "the line isn't a JSON-RPC message"}}); err != nil {
+				return err
+			}
+			continue
+		}
+		if m.ID == nil {
+			continue
+		}
+		var reply map[string]any
+		if m.JSONRPC != "2.0" || m.Method == "" {
+			reply = map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": invalidRequest, "message": "not a JSON-RPC 2.0 request"}}
+		} else if result, code, msg := h.answer(m); code != 0 {
+			reply = map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": code, "message": msg}}
+		} else {
+			reply = map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": result}
+		}
+		if err := enc.Encode(reply); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+// Answer handles one request in process, as ServeHTTP would: its result, or a
+// JSON-RPC error code and message. A server that combines several components'
+// docs uses it for the ones it carries itself.
+func (h *Handler) Answer(method string, params json.RawMessage) (result any, code int, msg string) {
+	return h.answer(message{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: method, Params: params})
+}
+
+// Component is the name this handler serves as.
+func (h *Handler) Component() string { return h.opts.Component }
