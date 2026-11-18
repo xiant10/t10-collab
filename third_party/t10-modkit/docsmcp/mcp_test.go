@@ -176,3 +176,26 @@ func TestBadFrontMatter(t *testing.T) {
 		t.Error("broken front matter was accepted")
 	}
 }
+
+func TestWrapAndStdio(t *testing.T) {
+	h := handler(t)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	w := httptest.NewRecorder()
+	h.Wrap(next).ServeHTTP(w, httptest.NewRequest("GET", "/other", nil))
+	if w.Code != http.StatusTeapot {
+		t.Errorf("other path: %d", w.Code)
+	}
+	if out := rpc(t, h.Wrap(next), "ping", nil); out["result"] == nil {
+		t.Errorf("ping through Wrap: %v", out)
+	}
+
+	var out strings.Builder
+	in := `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n" + `{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n"
+	if err := h.ServeStdio(strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[1], "docs_overview") {
+		t.Errorf("stdio:\n%s", out.String())
+	}
+}
