@@ -15,7 +15,7 @@ The design and the steps still to come are in the workspace's [`proposals/collab
 | `states`, `offers`, `transitions` | Yes | A lifecycle of its own: see [States and moves](#states-and-moves) |
 | Event feed | Yes | The owning module reads every change to its items: see [Telling the owning module](#telling-the-owning-module) |
 | Tenant versions | Yes | The owning module tailors a type for one tenant: see [Tenant versions](#tenant-versions) |
-| `scoped` | No | Step 5, with scoped entitlements |
+| `scoped` | Deferred | Until Property moves work here. Scopes live in the owning module, so it would push them to collab, which calls no module |
 
 ## Declaring a type
 
