@@ -113,12 +113,14 @@ Authorization: Bearer <t10-sales service token>
              "item_id": "wi_…", "type": "sales.presales", "actor": "usr_…", "at": "…",
              "detail": {"transition": "deliver", "from_state": "accepted", "to_state": "delivered", "payload": {"reply": "…"}},
              "item": {"title": "…", "status": "doing", "state": "delivered", "fields": {"what": "…"}, "subject_ref": "sales:deal:d_12",
-                      "creator_id": "usr_…", "owners": ["usr_…"], "version": 6}}],
+                      "creator_id": "usr_…", "owners": ["usr_…"], "due_at": "…",
+                      "pending_offers": [{"id": "ofr_…", "to_user_id": "usr_…", "mode": "transfer"}], "version": 6}}],
  "next": "7712.4031"}
 ```
 
 - Only `t10-<module>`'s service token reads `module=<module>`, and the feed holds that module's types only. It carries field values, because the module declared those fields and holds their source.
 - `detail` is the event as the item's history has it. `item` is the item **as it is when the feed is read**, not as it was at the event, and it's left out once the item is deleted.
+- `item.pending_offers` are the offers nobody has answered yet, oldest first, so a module knows who an item is offered to after a re-offer or a departure. `due_at` is null when the item has none.
 - The cursor is `<xid>.<seq>`, as the notification feed's, and reads stop short of any transaction still running, so a slow commit is delivered late, never skipped. Keep `next` and pass it as `after`; with nothing new it stays put. Save the cursor after acting on an event: a module that stops in between reads the event again, so it acts once per event `id`.
 - Collab never calls the module, and needs no broker. A module that's down catches up from its cursor.
 - `collab.events` holds `module`, set from the item's type as each event is written, so the feed is one indexed read. Events written before step 3 have none.

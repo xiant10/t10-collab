@@ -186,6 +186,16 @@ paths:
                             subject_ref: {type: string}
                             creator_id: {type: string}
                             owners: {type: array, items: {type: string}}
+                            due_at: {type: [string, "null"], format: date-time}
+                            pending_offers:
+                              type: array
+                              description: Offers nobody has answered, oldest first
+                              items:
+                                type: object
+                                properties:
+                                  id: {type: string}
+                                  to_user_id: {type: string}
+                                  mode: {type: string, enum: [transfer, share]}
                             version: {type: integer}
                   next: {type: string}
         default: {$ref: "#/components/responses/Error"}
@@ -1298,6 +1308,13 @@ components:
         response_note: {type: string}
         responded_at: {type: [string, "null"], format: date-time}
         created_at: {type: string, format: date-time}
+        item:
+          type: object
+          description: Given only by accept and decline, the item as the answer left it, since someone who declines may no longer read it
+          properties:
+            status: {$ref: "#/components/schemas/Status"}
+            state: {type: string}
+            version: {type: integer}
     Comment:
       type: object
       properties:
