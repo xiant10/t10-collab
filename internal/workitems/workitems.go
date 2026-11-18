@@ -113,6 +113,9 @@ type Item struct {
 	Type        string         `json:"type"`
 	TypeVersion int            `json:"type_version"`
 	Fields      map[string]any `json:"fields"`
+	// State is the type's word for where the item is, when its type has
+	// states. Status is then the state's phase.
+	State string `json:"state,omitempty"`
 	// SubjectRef is the record the item is about, as <module>:<type>:<id>.
 	SubjectRef string `json:"subject_ref,omitempty"`
 	// Visibility is the type's profile: team or participants.
@@ -148,7 +151,7 @@ const itemColumns = `i.id, i.title, i.description, i.status, i.priority, i.due_a
 	ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id),
 	ARRAY(SELECT c.user_id FROM collab.work_item_collaborators c WHERE c.tenant_id = i.tenant_id AND c.item_id = i.id ORDER BY c.user_id),
 	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at, COALESCE(i.stage, ''), i.rounds,
-	i.type, i.type_version, i.fields, COALESCE(i.subject_ref, ''), i.visibility, i.departure, ` + linksColumn
+	i.type, i.type_version, i.fields, COALESCE(i.state, ''), COALESCE(i.subject_ref, ''), i.visibility, i.departure, ` + linksColumn
 
 func scanItem(row pgx.Row) (Item, error) {
 	var i Item
@@ -158,7 +161,7 @@ func scanItem(row pgx.Row) (Item, error) {
 	var links []byte
 	err := row.Scan(&i.ID, &i.Title, &i.Description, &i.Status, &i.Priority, &i.DueAt, &i.CreatorID, &i.ListID, &i.Version,
 		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at, &i.Stage, &i.Rounds,
-		&i.Type, &i.TypeVersion, &i.Fields, &i.SubjectRef, &i.Visibility, &i.Departure, &links)
+		&i.Type, &i.TypeVersion, &i.Fields, &i.State, &i.SubjectRef, &i.Visibility, &i.Departure, &links)
 	if to != nil && at != nil {
 		i.Suggestion = &Suggestion{To: *to, Note: note, At: *at}
 	}
@@ -244,6 +247,10 @@ func (s *Service) Create(ctx context.Context, c policy.Caller, n NewItem, after 
 		if err != nil {
 			return err
 		}
+		status, state := StatusTodo, (*string)(nil)
+		if t.HasStates() {
+			status, state = t.Phase(t.Initial), &t.Initial
+		}
 		if n.ListID != "" {
 			var open bool
 			err := tx.QueryRow(ctx,
@@ -263,11 +270,11 @@ func (s *Service) Create(ctx context.Context, c policy.Caller, n NewItem, after 
 		id := ids.New("wi")
 		tag, err := tx.Exec(ctx,
 			`INSERT INTO collab.work_items (tenant_id, id, title, description, priority, due_at, creator_id, client_ref, list_id,
-			                                type, type_version, fields, subject_ref, visibility, departure)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			                                type, type_version, fields, subject_ref, visibility, departure, status, state)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 			 ON CONFLICT (tenant_id, creator_id, client_ref) WHERE client_ref IS NOT NULL DO NOTHING`,
 			c.TenantID, id, n.Title, n.Description, n.Priority, n.DueAt, c.UserID, ref, listID,
-			t.ID, t.Version, fields, subject, t.Visibility, t.Departure)
+			t.ID, t.Version, fields, subject, t.Visibility, t.Departure, status, state)
 		if err != nil {
 			return fmt.Errorf("insert item: %w", err)
 		}
@@ -600,6 +607,18 @@ func Unqueue(ctx context.Context, tx pgx.Tx, tenantID, id string) error {
 // CancelDeparted cancels an item whose owners have all left, when its type says
 // so, and tells its creator. The caller holds the item's lock.
 func CancelDeparted(ctx context.Context, tx pgx.Tx, c policy.Caller, item Item, gone []string) error {
+	if item.State != "" {
+		t, err := types.Resolve(ctx, tx, c.TenantID, item.Type)
+		if err != nil {
+			return err
+		}
+		if err := Unqueue(ctx, tx, c.TenantID, item.ID); err != nil {
+			return err
+		}
+		_, err = SetState(ctx, tx, c, item, t, t.Cancelled,
+			map[string]any{"reason": "owners_departed", "departed": gone}, []string{item.CreatorID})
+		return err
+	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE collab.work_items SET status = 'cancelled', stage = NULL, rounds = 0, version = version + 1, updated_at = now()
 		 WHERE tenant_id = $1 AND id = $2`, c.TenantID, item.ID); err != nil {
@@ -848,6 +867,10 @@ func (s *Service) Update(ctx context.Context, c policy.Caller, id string, p Patc
 			}
 		}
 		detail := map[string]any{"fields": changed}
+		if p.Status != nil && *p.Status != from && item.State != "" {
+			// A type with states moves only by its own moves.
+			return ErrMoveNotAllowed
+		}
 		if p.Status != nil && *p.Status != from {
 			to := *p.Status
 			if !slices.Contains([]string{StatusTodo, StatusDoing, StatusDone, StatusCancelled}, to) {
@@ -934,25 +957,31 @@ func WithdrawOffers(ctx context.Context, tx pgx.Tx, c policy.Caller, itemID stri
 		   AND ($3 = '' OR from_user_id = $3) AND ($4 = '' OR to_user_id = $4)
 		   AND (NOT $5 OR from_user_id NOT IN (
 		       SELECT user_id FROM collab.work_item_owners WHERE tenant_id = $1 AND item_id = $2))
-		 RETURNING id, from_user_id, to_user_id`, c.TenantID, itemID, scope.From, scope.To, scope.NonOwners)
+		 RETURNING id, from_user_id, to_user_id, mode`, c.TenantID, itemID, scope.From, scope.To, scope.NonOwners)
 	if err != nil {
 		return fmt.Errorf("withdraw offers: %w", err)
 	}
-	type ended struct{ id, from, to string }
+	type ended struct{ id, from, to, mode string }
 	offers, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (ended, error) {
 		var o ended
-		return o, row.Scan(&o.id, &o.from, &o.to)
+		return o, row.Scan(&o.id, &o.from, &o.to, &o.mode)
 	})
 	if err != nil {
 		return fmt.Errorf("withdraw offers: %w", err)
 	}
+	transfer := false
 	for _, o := range offers {
+		transfer = transfer || o.mode == transferMode
 		err := activity.Record(ctx, tx, c, activity.Change{
 			ItemID: itemID, Kind: "offer.withdrawn", Detail: map[string]any{"offer_id": o.id, "reason": reason}, Notify: []string{o.from, o.to},
 		})
 		if err != nil {
 			return err
 		}
+	}
+	// An item closing or deleted keeps the state that closed it.
+	if transfer && reason != "item_closed" && reason != "item_deleted" {
+		return OffersEnded(ctx, tx, c, itemID)
 	}
 	return nil
 }

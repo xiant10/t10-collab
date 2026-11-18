@@ -170,13 +170,13 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_get",
-			description: "Read one work item in full. Its version is needed to update it. On a list with a workflow, workflow shows its stage, the stage's guide, and where pass and changes take it.",
+			description: "Read one work item in full. Its version is needed to update it. On a list with a workflow, workflow shows its stage, the stage's guide, and where pass and changes take it. A module's typed item has a state, and moves lists the transitions you may take now with work_transition, with what each requires.",
 			action:      policy.ActionRead,
 			schema:      object([]string{"id"}, map[string]any{"id": text(id)}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				ID string `json:"id"`
 			}) (any, error) {
-				item, err := s.Items.View(ctx, c, a.ID)
+				item, relation, err := s.Items.ViewAs(ctx, c, a.ID)
 				if err != nil {
 					return nil, err
 				}
@@ -184,10 +184,15 @@ func (s *Server) tools() []tool {
 				if err != nil {
 					return nil, err
 				}
+				moves, err := s.Items.Moves(ctx, c, item, relation)
+				if err != nil {
+					return nil, err
+				}
 				return struct {
 					workitems.Item
-					Workflow *offers.Place `json:"workflow,omitempty"`
-				}{item, place}, nil
+					Moves    []workitems.Move `json:"moves"`
+					Workflow *offers.Place    `json:"workflow,omitempty"`
+				}{item, moves, place}, nil
 			}),
 		},
 		{
@@ -419,6 +424,27 @@ func (s *Server) tools() []tool {
 				To     string `json:"to"`
 			}) (any, error) {
 				return s.Offers.Advance(ctx, c, a.ID, a.Result, a.Note, a.To)
+			}),
+		},
+		{
+			name:        "work_transition",
+			description: "For agent teammates only. Move a module's typed item to another state, by a transition from work_get's moves. Give the note and payload the move asks for: reply is your result as text, links are https URLs with titles.",
+			action:      policy.ActionWrite,
+			agentOnly:   true,
+			schema: object([]string{"id", "transition"}, map[string]any{
+				"id": text(id), "transition": text("A transition ID from work_get's moves"),
+				"note": text("Why, or what you did; required when the move says so"),
+				"payload": map[string]any{"type": "object", "description": "The move's result, as its payload allows", "properties": map[string]any{
+					"reply": text("Your result as text"),
+					"links": map[string]any{"type": "array", "maxItems": 20, "items": object([]string{"url"}, map[string]any{"url": text("An https URL"), "title": text("What it is")})},
+				}},
+				"version": map[string]any{"type": "integer", "description": "The version last read, to make sure nothing changed since"},
+			}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				ID string `json:"id"`
+				workitems.TransitionRequest
+			}) (any, error) {
+				return s.Items.Transition(ctx, c, a.ID, a.TransitionRequest)
 			}),
 		},
 		{

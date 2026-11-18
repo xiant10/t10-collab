@@ -20,9 +20,9 @@ func TestFieldsKeepTheirDeclaredOrder(t *testing.T) {
 	}
 }
 
-func TestParseRefusesWhatIsntBuiltYet(t *testing.T) {
+func TestParseRefusesWhatIsntSupported(t *testing.T) {
 	for _, raw := range []string{
-		`{"id": "crm.ask", "owner_module": "crm", "version": 1, "label": "Ask", "states": {}}`,
+		`{"id": "crm.ask", "owner_module": "crm", "version": 1, "label": "Ask", "hooks": {}}`,
 		`{"id": "crm.ask", "owner_module": "crm", "version": 1, "label": "Ask", "fields": {"properties": {"a": {"type": "string", "format": "email"}}}}`,
 		`{"id": "crm.ask", "owner_module": "crm", "version": 1, "label": "Ask", "fields": {"properties": {"a": {"type": "string"}, "a": {"type": "string"}}}}`,
 		`{"id": "crm.ask", "owner_module": "crm", "version": 1, "label": "Ask", "fields": {"properties": {"a": {"type": "string"}}, "order": ["b"]}}`,

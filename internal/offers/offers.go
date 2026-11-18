@@ -20,6 +20,7 @@ import (
 	"t10-collab/internal/activity"
 	"t10-collab/internal/db"
 	"t10-collab/internal/policy"
+	"t10-collab/internal/types"
 	"t10-collab/internal/workitems"
 )
 
@@ -366,7 +367,15 @@ func (s *Service) SendIn(ctx context.Context, tx pgx.Tx, c policy.Caller, plan P
 	}
 	if !plan.assign {
 		err := activity.Record(ctx, tx, c, activity.Change{ItemID: itemID, Kind: "offer.sent", Detail: detail, Notify: []string{send.To}})
+		if err == nil {
+			_, err = workitems.OfferMove(ctx, tx, c, itemID, types.OfferSend, send.Mode, "")
+		}
 		return offer, err
+	}
+	// The state moves before the owners do, so the offers changeOwners ends
+	// find the item already past waiting on them.
+	if _, err := workitems.OfferMove(ctx, tx, c, itemID, types.OfferAssign, send.Mode, ""); err != nil {
+		return Offer{}, err
 	}
 	if err := changeOwners(ctx, tx, c, offer); err != nil {
 		return Offer{}, err
@@ -534,6 +543,9 @@ func (s *Service) Accept(ctx context.Context, c policy.Caller, id string) (Offer
 		if err := end(ctx, tx, c.TenantID, &o, "accepted", ""); err != nil {
 			return err
 		}
+		if _, err := workitems.OfferMove(ctx, tx, c, o.ItemID, types.OfferAccept, o.Mode, ""); err != nil {
+			return err
+		}
 		if err := changeOwners(ctx, tx, c, o); err != nil {
 			return err
 		}
@@ -565,9 +577,13 @@ func (s *Service) Decline(ctx context.Context, c policy.Caller, id, note string)
 		if err := end(ctx, tx, c.TenantID, &o, "declined", note); err != nil {
 			return err
 		}
-		return activity.Record(ctx, tx, c, activity.Change{
+		if err := activity.Record(ctx, tx, c, activity.Change{
 			ItemID: o.ItemID, Kind: "offer.declined", Detail: map[string]any{"offer_id": o.ID, "note": note}, Notify: []string{o.FromUserID},
-		})
+		}); err != nil {
+			return err
+		}
+		_, err = workitems.OfferMove(ctx, tx, c, o.ItemID, types.OfferDecline, o.Mode, note)
+		return err
 	})
 	if err != nil {
 		return Offer{}, err
@@ -617,25 +633,30 @@ func retire(ctx context.Context, tx pgx.Tx, c policy.Caller, itemID, state, filt
 	rows, err := tx.Query(ctx,
 		`UPDATE collab.offers SET state = '`+state+`', responded_at = now()
 		 WHERE tenant_id = $1 AND item_id = $2 AND state = 'pending' AND `+filter+`
-		 RETURNING id, from_user_id, to_user_id`, append([]any{c.TenantID, itemID}, args...)...)
+		 RETURNING id, from_user_id, to_user_id, mode`, append([]any{c.TenantID, itemID}, args...)...)
 	if err != nil {
 		return fmt.Errorf("end offers: %w", err)
 	}
-	type ended struct{ id, from, to string }
+	type ended struct{ id, from, to, mode string }
 	found, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (ended, error) {
 		var o ended
-		return o, row.Scan(&o.id, &o.from, &o.to)
+		return o, row.Scan(&o.id, &o.from, &o.to, &o.mode)
 	})
 	if err != nil {
 		return fmt.Errorf("end offers: %w", err)
 	}
+	transfer := false
 	for _, o := range found {
+		transfer = transfer || o.mode == ModeTransfer
 		err := activity.Record(ctx, tx, c, activity.Change{
 			ItemID: itemID, Kind: "offer." + state, Detail: map[string]any{"offer_id": o.id}, Notify: []string{o.from, o.to},
 		})
 		if err != nil {
 			return err
 		}
+	}
+	if transfer {
+		return workitems.OffersEnded(ctx, tx, c, itemID)
 	}
 	return nil
 }
@@ -658,9 +679,15 @@ func (s *Service) Withdraw(ctx context.Context, c policy.Caller, id string) (Off
 		if err := end(ctx, tx, c.TenantID, &o, "withdrawn", ""); err != nil {
 			return err
 		}
-		return activity.Record(ctx, tx, c, activity.Change{
+		if err := activity.Record(ctx, tx, c, activity.Change{
 			ItemID: o.ItemID, Kind: "offer.withdrawn", Detail: map[string]any{"offer_id": o.ID, "reason": "withdrawn"}, Notify: []string{o.ToUserID, o.FromUserID},
-		})
+		}); err != nil {
+			return err
+		}
+		if o.Mode == ModeTransfer {
+			return workitems.OffersEnded(ctx, tx, c, o.ItemID)
+		}
+		return nil
 	})
 	if err != nil {
 		return Offer{}, err

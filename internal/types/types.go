@@ -159,6 +159,16 @@ type Definition struct {
 	Subject    []string `json:"subject"`
 	Visibility string   `json:"visibility"`
 	Departure  string   `json:"departure"`
+	// States, when declared, give the type its own lifecycle; see states.go.
+	States map[string]State `json:"states,omitempty"`
+	// StateOrder lists the states in the order they were declared.
+	StateOrder []string `json:"state_order,omitempty"`
+	Initial    string   `json:"initial,omitempty"`
+	// Cancelled is the state collab moves an item to when it cancels it, as
+	// when its owners leave.
+	Cancelled   string       `json:"cancelled,omitempty"`
+	Offers      *Offers      `json:"offers,omitempty"`
+	Transitions []Transition `json:"transitions,omitempty"`
 }
 
 // Type is a definition as collab holds it.
@@ -177,7 +187,7 @@ var TaskType = Type{Definition: Definition{
 }}
 
 // strictly decodes JSON and refuses keys it doesn't know, so a module learns at
-// once that a part of its type, such as states, isn't supported yet.
+// once that a part of its type isn't supported.
 func strictly(data []byte, into any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -190,8 +200,8 @@ func strictly(data []byte, into any) error {
 // Parse reads and checks a definition.
 func Parse(data []byte) (Definition, error) {
 	var d Definition
-	if err := strictly(data, &d); err != nil {
-		return Definition{}, err
+	if err := json.Unmarshal(data, &d); err != nil {
+		return Definition{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return d, d.Validate()
 }
@@ -255,7 +265,10 @@ func (d *Definition) Validate() error {
 			return invalid("subject kind %q must be <module>:<type>", kind)
 		}
 	}
-	return d.Fields.validate()
+	if err := d.Fields.validate(); err != nil {
+		return err
+	}
+	return d.validateStates()
 }
 
 func (f *Fields) validate() error {

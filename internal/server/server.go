@@ -113,6 +113,7 @@ func (s *Server) routes() []route {
 		{"DELETE", "/v1/work-items/{id}", policy.ActionDelete, s.handleDeleteItem},
 		{"GET", "/v1/work-items/{id}/events", policy.ActionRead, s.handleItemEvents},
 		{"POST", "/v1/work-items/{id}/claim", policy.ActionWrite, s.handleClaim},
+		{"POST", "/v1/work-items/{id}/transition", policy.ActionWrite, s.handleTransition},
 		{"PUT", "/v1/work-items/{id}/list", policy.ActionWrite, s.handleSetList},
 		{"DELETE", "/v1/work-items/{id}/owners/me", policy.ActionWrite, s.handleStopOwning},
 		{"PUT", "/v1/work-items/{id}/collaborators/{user}", policy.ActionWrite, s.handleAddCollaborator},
@@ -389,6 +390,9 @@ func classify(err error) (status int, code, message string) {
 		{workitems.ErrListArchived, http.StatusConflict, "list_archived"},
 		{workitems.ErrTooManyLinks, http.StatusConflict, "too_many_links"},
 		{workitems.ErrNotForType, http.StatusConflict, "not_for_type"},
+		{workitems.ErrMoveNotAllowed, http.StatusConflict, "transition_not_allowed"},
+		{workitems.ErrRequirementsUnmet, http.StatusUnprocessableEntity, "requirements_unmet"},
+		{offers.ErrTypedNotOnWorkflow, http.StatusConflict, "typed_item_not_on_workflow"},
 		{types.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 		{types.ErrUnknown, http.StatusUnprocessableEntity, "unknown_type"},
 		{lists.ErrInvalid, http.StatusBadRequest, "invalid_request"},
@@ -521,14 +525,20 @@ func (s *Server) handleGetItem(w http.ResponseWriter, r *http.Request, c policy.
 		failure(w, r, err)
 		return
 	}
+	moves, err := s.Items.Moves(r.Context(), c, item, relation)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		workitems.Item
 		Can           policy.Can          `json:"can"`
+		Moves         []workitems.Move    `json:"moves"`
 		PendingOffers []offers.Offer      `json:"pending_offers"`
 		Working       []workitems.Working `json:"working"`
 		Mention       *workitems.Mention  `json:"mention,omitempty"`
 		Workflow      *offers.Place       `json:"workflow,omitempty"`
-	}{item, relation.Can(item.Closed()), pending, working, mention, place})
+	}{item, relation.Can(item.Closed()), moves, pending, working, mention, place})
 }
 
 func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request, c policy.Caller) {
@@ -609,6 +619,19 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request, c poli
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events, "next_cursor": next})
+}
+
+func (s *Server) handleTransition(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var req workitems.TransitionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.Items.Transition(r.Context(), c, r.PathValue("id"), req)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request, c policy.Caller) {

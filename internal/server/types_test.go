@@ -26,6 +26,28 @@ var (
 		}},
 		"subject":    []string{"sales:deal", "sales:meeting"},
 		"visibility": "participants", "departure": "cancel",
+		// The proposal's lifecycle, as a sales module would declare it.
+		"states": map[string]any{
+			"draft":     map[string]any{"phase": "todo", "label": "Draft"},
+			"sent":      map[string]any{"phase": "todo", "label": "Sent"},
+			"accepted":  map[string]any{"phase": "doing", "label": "Accepted"},
+			"delivered": map[string]any{"phase": "doing", "label": "Delivered"},
+			"reviewed":  map[string]any{"phase": "done", "label": "Reviewed"},
+			"declined":  map[string]any{"phase": "cancelled", "label": "Declined"},
+			"cancelled": map[string]any{"phase": "cancelled", "label": "Cancelled"},
+		},
+		"initial": "draft", "cancelled": "cancelled",
+		"offers": map[string]any{
+			"send":     map[string]any{"from": []string{"draft"}, "to": "sent", "requires": []string{"what", "for_whom"}},
+			"accept":   map[string]any{"to": "accepted"},
+			"decline":  map[string]any{"to": "declined", "note": "required"},
+			"withdraw": map[string]any{"to": "draft"},
+		},
+		"transitions": []any{
+			map[string]any{"id": "deliver", "label": "Deliver", "from": []string{"accepted"}, "to": "delivered", "by": "owner", "payload": []string{"reply", "links"}},
+			map[string]any{"id": "review", "from": []string{"delivered"}, "to": "reviewed", "by": "creator"},
+			map[string]any{"id": "cancel", "from": []string{"draft", "sent", "accepted"}, "to": "cancelled", "by": "creator"},
+		},
 	}
 	followup = map[string]any{
 		"id": "property.followup", "owner_module": "property", "version": 1, "label": "Follow-up",
@@ -78,6 +100,12 @@ func (h *harness) types() {
 func (h *harness) typed(user string, body map[string]any) string {
 	h.t.Helper()
 	return h.want(user, "POST", "/v1/work-items", with(map[string]any{"title": "Ask"}, body), http.StatusCreated)["id"].(string)
+}
+
+// ask creates a presales item with what a send requires.
+func (h *harness) ask(user string) string {
+	h.t.Helper()
+	return h.typed(user, map[string]any{"type": "sales.presales", "fields": map[string]any{"what": "A deck", "for_whom": "boss"}})
 }
 
 func ids(items any) []string {
@@ -223,7 +251,7 @@ func TestOnlyParticipantsReadAParticipantsItem(t *testing.T) {
 	h.want("eve", "PUT", "/v1/admin/settings", map[string]string{"manager_visibility": "all_reports"}, http.StatusOK)
 	list := h.list("ada", "dan")
 
-	ask := h.typed("ada", map[string]any{"type": "sales.presales"})
+	ask := h.ask("ada")
 	team := h.typed("ada", map[string]any{"type": "property.followup"})
 	// carol manages ada: she reads the team item, never the participants one.
 	h.want("carol", "GET", "/v1/work-items/"+team, nil, http.StatusOK)
@@ -243,10 +271,11 @@ func TestOnlyParticipantsReadAParticipantsItem(t *testing.T) {
 	// The recipient reads it while the offer is pending, and not after declining.
 	offer := h.send("ada", ask, "bob", "transfer")
 	h.want("bob", "GET", "/v1/work-items/"+ask, nil, http.StatusOK)
-	h.want("bob", "POST", "/v1/offers/"+offer+"/decline", nil, http.StatusOK)
+	h.want("bob", "POST", "/v1/offers/"+offer+"/decline", map[string]any{"note": "busy"}, http.StatusOK)
 	h.wantError("bob", "GET", "/v1/work-items/"+ask, nil, http.StatusNotFound, "not_found")
 
 	// Accepted, bob owns it, and his manager carol still can't read it.
+	ask = h.ask("ada")
 	h.want("bob", "POST", "/v1/offers/"+h.send("ada", ask, "bob", "transfer")+"/accept", nil, http.StatusOK)
 	h.want("bob", "GET", "/v1/work-items/"+ask, nil, http.StatusOK)
 	h.want("ada", "GET", "/v1/work-items/"+ask, nil, http.StatusOK) // the creator
@@ -265,13 +294,13 @@ func TestTheTypeDecidesWhatADepartureDoes(t *testing.T) {
 	h.managedBy("bob", "carol")
 
 	// cancel: ends at once, and the creator is told.
-	cancelled := h.typed("ada", map[string]any{"type": "sales.presales"})
+	cancelled := h.ask("ada")
 	h.want("bob", "POST", "/v1/offers/"+h.send("ada", cancelled, "bob", "transfer")+"/accept", nil, http.StatusOK)
 	// creator: offered to the creator only, never the manager.
-	offered := h.typed("ada", map[string]any{"type": "sales.review"})
+	offered := h.typed("ada", map[string]any{"type": "sales.review", "fields": map[string]any{"what": "A deck", "for_whom": "boss"}})
 	h.want("bob", "POST", "/v1/offers/"+h.send("ada", offered, "bob", "transfer")+"/accept", nil, http.StatusOK)
 	// creator, with the creator gone too: cancelled.
-	orphan := h.typed("dan", map[string]any{"type": "sales.review"})
+	orphan := h.typed("dan", map[string]any{"type": "sales.review", "fields": map[string]any{"what": "A deck", "for_whom": "boss"}})
 	h.want("bob", "POST", "/v1/offers/"+h.send("dan", orphan, "bob", "transfer")+"/accept", nil, http.StatusOK)
 
 	h.org.set("inactive", acme+"/bob", acme+"/dan")
@@ -288,7 +317,7 @@ func TestTheTypeDecidesWhatADepartureDoes(t *testing.T) {
 		 WHERE n.user_id = 'ada' AND e.item_id = $1 AND e.detail->>'reason' = 'owners_departed'`, cancelled).Scan(&told); err != nil || told != 1 {
 		t.Errorf("creator told %d times: %v", told, err)
 	}
-	if got := h.want("ada", "GET", "/v1/work-items/"+offered, nil, http.StatusOK)["status"]; got != "todo" {
+	if got := h.want("ada", "GET", "/v1/work-items/"+offered, nil, http.StatusOK)["state"]; got != "accepted" {
 		t.Errorf("creator type: status %v", got)
 	}
 	h.wantInbox("ada", 1)
@@ -314,7 +343,7 @@ func TestAnAdminCantShowAParticipantsItemToSomeoneNew(t *testing.T) {
 	h := newHarness(t)
 	h.types()
 	h.setRole("eve", "admin")
-	item := h.typed("ada", map[string]any{"type": "sales.presales"})
+	item := h.ask("ada")
 	h.want("bob", "POST", "/v1/offers/"+h.send("ada", item, "bob", "transfer")+"/accept", nil, http.StatusOK)
 	h.suspend("bob")
 	h.sweep()
@@ -373,4 +402,198 @@ func TestAgentsCreateAndFindTypedItems(t *testing.T) {
 	if found.failed || len(found.data["items"].([]any)) != 1 {
 		t.Errorf("list = %+v", found)
 	}
+}
+
+func moveIDs(item map[string]any) []string {
+	out := []string{}
+	for _, raw := range item["moves"].([]any) {
+		out = append(out, raw.(map[string]any)["id"].(string))
+	}
+	return out
+}
+
+func (h *harness) wantState(reader, item, state, status string) map[string]any {
+	h.t.Helper()
+	out := h.want(reader, "GET", "/v1/work-items/"+item, nil, http.StatusOK)
+	if out["state"] != state || out["status"] != status {
+		h.t.Fatalf("%s: state %v, status %v, want %s, %s", item, out["state"], out["status"], state, status)
+	}
+	return out
+}
+
+func TestATypedItemMovesThroughItsLifecycle(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	item := h.typed("ada", map[string]any{"type": "sales.presales"})
+	if got := moveIDs(h.wantState("ada", item, "draft", "todo")); !slices.Equal(got, []string{"cancel"}) {
+		t.Errorf("ada's moves in draft = %v", got)
+	}
+	h.wantError("ada", "PATCH", "/v1/work-items/"+item, map[string]any{"version": 1, "status": "doing"}, http.StatusConflict, "transition_not_allowed")
+
+	// A send needs what the type requires, and fails whole without it.
+	h.wantError("ada", "POST", "/v1/work-items/"+item+"/send", map[string]any{"to": "bob"}, http.StatusUnprocessableEntity, "requirements_unmet")
+	h.wantInbox("bob", 0)
+	version := h.want("ada", "GET", "/v1/work-items/"+item, nil, http.StatusOK)["version"]
+	h.want("ada", "PATCH", "/v1/work-items/"+item, map[string]any{"version": version, "fields": map[string]any{"what": "A deck", "for_whom": "boss"}}, http.StatusOK)
+	offer := h.send("ada", item, "bob", "transfer")
+	h.wantState("ada", item, "sent", "todo")
+	if got := moveIDs(h.wantState("bob", item, "sent", "todo")); len(got) != 0 {
+		t.Errorf("bob's moves before accepting = %v", got)
+	}
+	h.wantError("bob", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "deliver"}, http.StatusConflict, "transition_not_allowed")
+
+	// Withdrawn, it's a draft again; sent again and declined, it's over.
+	h.want("ada", "POST", "/v1/offers/"+offer+"/withdraw", nil, http.StatusOK)
+	h.wantState("ada", item, "draft", "todo")
+	offer = h.send("ada", item, "bob", "transfer")
+	h.wantError("bob", "POST", "/v1/offers/"+offer+"/decline", map[string]any{}, http.StatusUnprocessableEntity, "requirements_unmet")
+	h.want("bob", "POST", "/v1/offers/"+offer+"/decline", map[string]any{"note": "Not this week"}, http.StatusOK)
+	h.wantState("ada", item, "declined", "cancelled")
+
+	// Accepted, bob delivers and ada reviews.
+	item = h.ask("ada")
+	h.want("bob", "POST", "/v1/offers/"+h.send("ada", item, "bob", "transfer")+"/accept", nil, http.StatusOK)
+	if got := moveIDs(h.wantState("bob", item, "accepted", "doing")); !slices.Equal(got, []string{"deliver"}) {
+		t.Errorf("bob's moves = %v", got)
+	}
+	if got := moveIDs(h.wantState("ada", item, "accepted", "doing")); !slices.Equal(got, []string{"cancel"}) {
+		t.Errorf("ada's moves = %v", got)
+	}
+	h.wantError("ada", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "deliver"}, http.StatusForbidden, "forbidden")
+	h.wantError("bob", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "deliver", "payload": map[string]any{"price": 1}}, http.StatusBadRequest, "invalid_request")
+	h.wantError("bob", "POST", "/v1/work-items/"+item+"/transition", map[string]any{
+		"transition": "deliver", "payload": map[string]any{"links": []any{map[string]any{"url": "http://x"}}},
+	}, http.StatusBadRequest, "invalid_request")
+	h.wantError("bob", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "deliver", "version": 1}, http.StatusConflict, "version_conflict")
+	out := h.want("bob", "POST", "/v1/work-items/"+item+"/transition", map[string]any{
+		"transition": "deliver", "note": "Here it is",
+		"payload": map[string]any{"reply": "Deck attached", "links": []any{map[string]any{"url": "https://docs.example/deck", "title": "Deck"}}},
+	}, http.StatusOK)
+	if out["state"] != "delivered" {
+		t.Fatalf("deliver = %v", out)
+	}
+	h.want("ada", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "review"}, http.StatusOK)
+	h.wantState("bob", item, "reviewed", "done")
+
+	var detail string
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT e.detail::text FROM collab.events e JOIN collab.notifications n ON n.tenant_id = e.tenant_id AND n.event_id = e.id
+		 WHERE e.item_id = $1 AND e.kind = 'item.state_changed' AND e.detail->>'transition' = 'deliver' AND n.user_id = 'ada'`, item).Scan(&detail); err != nil {
+		t.Fatalf("ada wasn't told of the delivery: %v", err)
+	}
+	for _, want := range []string{`"to_state": "delivered"`, `"reply": "Deck attached"`, `"note": "Here it is"`} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("event %s lacks %s", detail, want)
+		}
+	}
+	// Closed by its type, it can't be reopened by status.
+	h.wantError("ada", "PATCH", "/v1/work-items/"+item, map[string]any{"version": 5, "status": "todo"}, http.StatusConflict, "transition_not_allowed")
+}
+
+func TestCancellingEndsTheOffer(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	item := h.ask("ada")
+	h.send("ada", item, "bob", "transfer")
+	h.want("ada", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "cancel"}, http.StatusOK)
+	h.wantState("ada", item, "cancelled", "cancelled") // not back to draft by the withdrawal
+	h.wantInbox("bob", 0)
+}
+
+func TestAnUnansweredOfferToSomeoneWhoLeftRevertsTheState(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	item := h.ask("ada")
+	h.send("ada", item, "bob", "transfer")
+	h.org.set("inactive", acme+"/bob")
+	h.sweep()
+	h.wantState("ada", item, "draft", "todo")
+}
+
+func TestAnAssignmentNeedsAnAssignMapping(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	ts := h.teammateServer()
+	h.url = ts.URL
+	// carol manages acc_lead, so her send is an assignment, which skips acceptance.
+	item := h.ask("carol")
+	h.wantError("carol", "POST", "/v1/work-items/"+item+"/send", map[string]any{"to": "acc_lead"}, http.StatusConflict, "transition_not_allowed")
+	assign := map[string]any{
+		"send":     map[string]any{"from": []string{"draft"}, "to": "sent", "requires": []string{"what", "for_whom"}},
+		"assign":   map[string]any{"from": []string{"draft"}, "to": "accepted", "requires": []string{"what", "for_whom"}},
+		"accept":   map[string]any{"to": "accepted"},
+		"decline":  map[string]any{"to": "declined", "note": "required"},
+		"withdraw": map[string]any{"to": "draft"},
+	}
+	if got, code := h.pushType("t10-sales", with(presales, map[string]any{"version": 2, "offers": assign})); got != http.StatusOK {
+		t.Fatalf("push = %d %s", got, code)
+	}
+	h.send("carol", item, "acc_lead", "transfer")
+	h.wantState("carol", item, "accepted", "doing")
+
+	// The agent teammate delivers with work_transition; an assistant can't.
+	moves := call(t, ts.URL, "teammate:acc_lead", "work_get", map[string]any{"id": item})
+	if moves.failed || !slices.Equal(moveIDs(moves.data), []string{"deliver"}) {
+		t.Fatalf("work_get = %+v", moves)
+	}
+	if got := call(t, ts.URL, "agent-write", "work_transition", map[string]any{"id": item, "transition": "deliver"}); !got.failed {
+		t.Errorf("an assistant moved it: %+v", got)
+	}
+	done := call(t, ts.URL, "teammate:acc_lead", "work_transition", map[string]any{
+		"id": item, "transition": "deliver", "payload": map[string]any{"reply": "Draft deck in the folder"},
+	})
+	if done.failed || done.data["state"] != "delivered" {
+		t.Fatalf("work_transition = %+v", done)
+	}
+}
+
+func TestATypeWithStatesStaysOffWorkflows(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	inspection := with(followup, map[string]any{
+		"id": "property.inspection", "states": map[string]any{
+			"open": map[string]any{"phase": "todo", "label": "Open"}, "closed": map[string]any{"phase": "done", "label": "Closed"}},
+		"initial":     "open",
+		"transitions": []any{map[string]any{"id": "close", "from": []string{"open"}, "to": "closed", "by": []string{"owner", "list_member"}}},
+	})
+	if got, code := h.pushType("t10-property", inspection); got != http.StatusOK {
+		t.Fatalf("push = %d %s", got, code)
+	}
+	list := h.list("ada", "bob")
+	h.want("ada", "PUT", "/v1/lists/"+list+"/workflow", map[string]any{"stages": []any{map[string]any{"name": "Do", "holder": "ada"}}, "auto_start": true}, http.StatusOK)
+	item := h.typed("ada", map[string]any{"type": "property.inspection", "list_id": list})
+	if out := h.want("ada", "GET", "/v1/work-items/"+item, nil, http.StatusOK); out["stage"] != nil {
+		t.Errorf("auto start put a typed item on the workflow: %v", out["stage"])
+	}
+	h.wantError("ada", "POST", "/v1/work-items/"+item+"/stage", map[string]any{}, http.StatusConflict, "typed_item_not_on_workflow")
+	// A list member may close it, as the type says.
+	h.want("bob", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "close"}, http.StatusOK)
+	h.wantState("ada", item, "closed", "done")
+}
+
+func TestAStateALaterVersionRemovedCanOnlyBeCancelled(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	item := h.ask("ada")
+	h.want("bob", "POST", "/v1/offers/"+h.send("ada", item, "bob", "transfer")+"/accept", nil, http.StatusOK)
+	h.want("bob", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "deliver"}, http.StatusOK)
+
+	states := map[string]any{}
+	for k, v := range presales["states"].(map[string]any) {
+		if k != "delivered" {
+			states[k] = v
+		}
+	}
+	v2 := with(presales, map[string]any{"version": 2, "states": states, "transitions": []any{
+		map[string]any{"id": "review", "from": []string{"accepted"}, "to": "reviewed", "by": "creator"},
+		map[string]any{"id": "cancel", "from": []string{"draft", "sent", "accepted"}, "to": "cancelled", "by": "creator"},
+	}})
+	if got, code := h.pushType("t10-sales", v2); got != http.StatusOK {
+		t.Fatalf("push = %d %s", got, code)
+	}
+	if got := moveIDs(h.wantState("ada", item, "delivered", "doing")); !slices.Equal(got, []string{"cancel"}) {
+		t.Errorf("moves from a removed state = %v", got)
+	}
+	h.wantError("ada", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "review"}, http.StatusConflict, "transition_not_allowed")
+	h.want("ada", "POST", "/v1/work-items/"+item+"/transition", map[string]any{"transition": "cancel"}, http.StatusOK)
 }

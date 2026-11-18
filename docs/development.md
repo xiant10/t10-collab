@@ -34,7 +34,7 @@ How the code works and how to change it safely. [`design.md`](design.md) is the 
 **An agent.** `POST /mcp` speaks JSON-RPC. `tools/list` needs no token, because a harness lists tools at startup. `tools/call` verifies a delegated token and refuses:
 
 - a grant with constraints, since none are defined here;
-- a teammate-only tool (`work_send`, `work_advance`, `work_accept`, `work_decline`, `work_claim`) when the caller isn't an agent account, so an assistant acting for a person only reads and drafts (`work_suggest`);
+- a teammate-only tool (`work_send`, `work_advance`, `work_transition`, `work_accept`, `work_decline`, `work_claim`) when the caller isn't an agent account, so an assistant acting for a person only reads and drafts (`work_suggest`);
 - a tool whose action (`work:read`, `work:write`, `work:send`) the token's chain doesn't allow.
 
 The tool runs the same service code as the routes, with a `Caller` that also holds the agent's `GrantID` and `GrantChain`, so an agent can do no more than its principal. Results go back as JSON inside one `<module_record>` tag, which harnesses treat as data.
