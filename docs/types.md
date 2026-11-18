@@ -1,8 +1,16 @@
+---
+title: "Item types"
+audience: consumer
+kind: guide
+status: current
+summary: "Keep a module's requests between people in collab as typed items: declare a type, its fields and transitions."
+---
+
 # Item types
 
 A module whose work is a request between people can keep it in collab as a **typed item**, instead of building its own offers, inboxes, history, notifications and departures. The module declares the type; collab checks the declaration and runs no module code. An item with no type is `collab.task` and behaves as it always has.
 
-The design and the steps still to come are in the workspace's [`proposals/collab-item-types.md`](../../proposals/collab-item-types.md). This page is what's built: steps 1 to 4.
+The design and the steps still to come are in the workspace's [`docs/records/collab-item-types.md`](../../docs/records/collab-item-types.md). This page is what's built: steps 1 to 4.
 
 ## What a type gives an item
 

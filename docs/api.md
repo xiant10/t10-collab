@@ -1,3 +1,11 @@
+---
+title: "t10-collab API"
+audience: consumer
+kind: reference
+status: current
+summary: "t10-collab routes, agent tools at /mcp, and the events it posts: work items, offers, lists and types."
+---
+
 # t10-collab API
 
 The reference for calling `t10-collab`: people's routes, admin routes, the agent tools at `/mcp`, and the events it posts to `t10-automations`. [`openapi.yaml`](openapi.yaml) is the machine-readable spec, and a test keeps it in step with the routes. [`development.md`](development.md) explains the code behind them.

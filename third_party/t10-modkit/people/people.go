@@ -1,6 +1,6 @@
 // Package people reads org facts from the auth service with this service's own
 // token. Any failure is an error, never an empty answer, so that callers fail
-// closed. See auth-server/docs/service-api.md.
+// closed. See auth-server/docs/guides/service-api.md.
 package people
 
 import (
