@@ -2,7 +2,7 @@
 
 A module whose work is a request between people can keep it in collab as a **typed item**, instead of building its own offers, inboxes, history, notifications and departures. The module declares the type; collab checks the declaration and runs no module code. An item with no type is `collab.task` and behaves as it always has.
 
-The design and the steps still to come are in the workspace's [`proposals/collab-item-types.md`](../../proposals/collab-item-types.md). This page is what's built: steps 1 to 3.
+The design and the steps still to come are in the workspace's [`proposals/collab-item-types.md`](../../proposals/collab-item-types.md). This page is what's built: steps 1 to 4.
 
 ## What a type gives an item
 
@@ -14,7 +14,8 @@ The design and the steps still to come are in the workspace's [`proposals/collab
 | `departure` | Yes | What the sweep does once all its owners have left |
 | `states`, `offers`, `transitions` | Yes | A lifecycle of its own: see [States and moves](#states-and-moves) |
 | Event feed | Yes | The owning module reads every change to its items: see [Telling the owning module](#telling-the-owning-module) |
-| Tenant versions, `scoped` | No | Steps 4 and 5 |
+| Tenant versions | Yes | The owning module tailors a type for one tenant: see [Tenant versions](#tenant-versions) |
+| `scoped` | No | Step 5, with scoped entitlements |
 
 ## Declaring a type
 
@@ -37,6 +38,19 @@ Authorization: Bearer <t10-sales service token>
 - The same version and definition again is a no-op, so every replica pushes at start. A lower version, or the same one with a different definition, answers `409 type_version_stale`.
 - `visibility` and `departure` never change for a type ID (`409 type_fixed`). They're copied onto each item, so the read filters need no join, and a module can't weaken what its items promised.
 - Collab never calls the module. A module that's down changes nothing.
+
+### Tenant versions
+
+A module whose types differ by customer, such as sales' ticket types from each company's pack, tailors them per tenant with the same token:
+
+```
+PUT    /internal/v1/types/{type}/tenants/{tenant}   the whole type, as this tenant has it
+DELETE /internal/v1/types/{type}/tenants/{tenant}   back to the default
+```
+
+- A tenant version may change the type's label, state and transition labels, field titles, and what `send`, `assign` and transitions `require`, and it may add fields. Anything else answers `400 invalid_type`: states, phases, who takes a move, where a move goes, payloads, notes, the subject, the visibility profile and the departure rule are the module's promises to every tenant, and a pack can't weaken them. Collab checks this by putting the default's values back into the tenant version and comparing.
+- It tailors one default version and carries that `version`. Push the default first (`409 type_default_missing`). Once a newer default is pushed, the tenant falls back to it until the module pushes the tenant's version for it, so a tailoring never reshapes a lifecycle it wasn't written for. A module pushes its defaults, then its tenant versions, at start.
+- `GET /v1/types` and every check on an item use the tenant's version while it applies.
 
 **Fields** are a small part of JSON Schema that any client can draw: `type` (`string`, `integer`, `number`, `boolean`), `title`, `maxLength` (strings; 2000 when left out), `enum`. Other keywords are refused. Clients show fields in the order they were declared, which collab keeps as `fields.order`. An item's fields are capped at 32 KB.
 

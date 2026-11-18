@@ -446,9 +446,14 @@ func Resolve(ctx context.Context, q Querier, tenantID, id string) (Type, error) 
 		return TaskType, nil
 	}
 	return scanType(q.QueryRow(ctx,
-		`SELECT definition, updated_at FROM collab.types WHERE id = $2 AND tenant_id IN ('', $1)
-		 ORDER BY tenant_id DESC LIMIT 1`, tenantID, id))
+		`SELECT t.definition, t.updated_at FROM collab.types t WHERE t.id = $2 AND `+applies+`
+		 ORDER BY t.tenant_id DESC LIMIT 1`, tenantID, id))
 }
+
+// applies is the filter for the type rows that apply in tenant $1: the
+// defaults, and a tenant version only while it tailors the current default.
+const applies = `(t.tenant_id = '' OR (t.tenant_id = $1 AND t.version =
+	(SELECT d.version FROM collab.types d WHERE d.tenant_id = '' AND d.id = t.id)))`
 
 func scanType(row pgx.Row) (Type, error) {
 	var t Type
@@ -474,8 +479,8 @@ func (s *Store) Resolve(ctx context.Context, tenantID, id string) (Type, error) 
 // List returns every type that applies in a tenant, the built-in task first.
 func (s *Store) List(ctx context.Context, tenantID string) ([]Type, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT DISTINCT ON (id) definition, updated_at FROM collab.types WHERE tenant_id IN ('', $1)
-		 ORDER BY id, tenant_id DESC`, tenantID)
+		`SELECT DISTINCT ON (t.id) t.definition, t.updated_at FROM collab.types t WHERE `+applies+`
+		 ORDER BY t.id, t.tenant_id DESC`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list types: %w", err)
 	}

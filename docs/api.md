@@ -141,6 +141,7 @@ These need a tenant admin, or a member holding `work:admin` from `auth-server`.
 | `GET /v1/module` | The manifest: `id: collab`, `api_version: 1`, `action_prefix: work`, `features`, and `trigger_events`, the event kinds automations can fire on |
 | `GET /internal/v1/attention?tenant=&user=&since=` | Counts for `t10-notify`'s digest, such as offers to answer and items overdue, with no titles or names. Only `t10-notify`'s service token may call it |
 | `PUT /internal/v1/types/{type}` | A module declares an [item type](types.md). Only the owning module's service token, `t10-<module>`, may call it |
+| `PUT`, `DELETE /internal/v1/types/{type}/tenants/{tenant}` | The owning module tailors a type for one tenant, or puts it back on the default. See [tenant versions](types.md#tenant-versions) |
 | `GET /internal/v1/events?module=&after=&limit=` | The events about a module's [typed items](types.md#telling-the-owning-module), from every tenant, for that module's service token only |
 
 ## Agent tools (MCP)
@@ -225,7 +226,7 @@ The payload holds IDs only. A run reads the item through its own tools.
 | `unknown_type` | 422 | No such item type in this tenant |
 | `transition_not_allowed`, `typed_item_not_on_workflow` | 409 | The item's type has no such move from its state for the caller, or its states keep it off workflows |
 | `requirements_unmet` | 422 | A field, payload or note the move needs is empty |
-| `invalid_type`, `type_version_stale`, `type_fixed` | 400, 409 | On `PUT /internal/v1/types/{type}`: a bad definition, a version that isn't newer, or a changed `visibility` or `departure` |
+| `invalid_type`, `type_version_stale`, `type_fixed`, `type_default_missing` | 400, 409 | On the type routes: a bad definition or tailoring, a version that isn't newer, a changed `visibility` or `departure`, or a tenant version with no default at its version |
 | `agent_loop` | 409 | Agents have passed it on too often, and the sending agent has no manager to send it to instead |
 | `rate_limited` | 429 | Too many sends this hour |
 | `org_unavailable` | 503 | `auth-server` couldn't answer an org question |

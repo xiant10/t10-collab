@@ -110,6 +110,36 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Type"}
         default: {$ref: "#/components/responses/Error"}
+  /internal/v1/types/{type}/tenants/{tenant}:
+    parameters:
+      - {name: type, in: path, required: true, schema: {type: string}}
+      - {name: tenant, in: path, required: true, schema: {type: string}}
+    put:
+      summary: Tailor a type for one tenant, from the module that owns it
+      description: >-
+        Only the owning module's service token. The body is the whole type, at the version of the current
+        default, which must be pushed first (type_default_missing). It may change labels, field titles and what
+        moves require, and add fields; anything else answers invalid_type. Once a newer default is pushed, the
+        tenant falls back to it until the module tailors that version.
+      operationId: putTenantType
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TypeDefinition"}
+      responses:
+        "200":
+          description: The tenant's version as stored
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Type"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Put the tenant back on the type's default
+      operationId: deleteTenantType
+      responses:
+        "204": {description: Back on the default, or it already was}
+        default: {$ref: "#/components/responses/Error"}
   /internal/v1/events:
     get:
       summary: The events about one module's typed items, for that module
@@ -1313,6 +1343,7 @@ components:
         - transition_not_allowed
         - requirements_unmet
         - typed_item_not_on_workflow
+        - type_default_missing
         - not_found
         - not_on_list
         - holder_not_accepting

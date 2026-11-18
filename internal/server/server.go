@@ -40,6 +40,8 @@ const (
 	attentionRoute = "/internal/v1/attention"
 	// typeRoute is where an owning module pushes its item types.
 	typeRoute = "/internal/v1/types/{type}"
+	// tenantTypeRoute is where an owning module tailors a type for one tenant.
+	tenantTypeRoute = "/internal/v1/types/{type}/tenants/{tenant}"
 	// feedRoute is where an owning module reads the events about its types.
 	feedRoute = "/internal/v1/events"
 	// attentionWindow is how far back counts look when a caller names no time.
@@ -182,6 +184,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleAttention)))
 	key = "PUT " + typeRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handlePutType)))
+	key = "PUT " + tenantTypeRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handlePutType)))
+	key = "DELETE " + tenantTypeRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleDeleteTenantType)))
 	key = "GET " + feedRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleModuleFeed)))
 	key = "POST " + mcpRoute
@@ -257,8 +263,8 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, counts)
 }
 
-// handlePutType takes an item type's default from the module that owns it,
-// with that module's service token. Errors carry their detail, because they
+// handlePutType takes an item type's default, or one tenant's version of it,
+// from the module that owns it, with that module's service token. Errors carry their detail, because they
 // describe the module's own declaration, never a record.
 func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
 	service, ok := s.service(w, r)
@@ -274,11 +280,20 @@ func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
 	if err == nil && d.ID != r.PathValue("type") {
 		err = fmt.Errorf("%w: the body's id must match the path", types.ErrInvalid)
 	}
+	tenant := r.PathValue("tenant")
 	var t types.Type
-	if err == nil {
+	switch {
+	case err != nil:
+	case r.Pattern == "PUT "+tenantTypeRoute && !people.ValidID(tenant):
+		err = fmt.Errorf("%w: name a tenant", types.ErrInvalid)
+	case r.Pattern == "PUT "+tenantTypeRoute:
+		t, err = s.Types.PutTenant(r.Context(), service, tenant, d)
+	default:
 		t, err = s.Types.Put(r.Context(), service, d)
 	}
 	switch {
+	case errors.Is(err, types.ErrNoDefault):
+		writeError(w, http.StatusConflict, "type_default_missing", err.Error())
 	case errors.Is(err, types.ErrInvalid):
 		writeError(w, http.StatusBadRequest, "invalid_type", err.Error())
 	case errors.Is(err, types.ErrNotOwner):
@@ -291,6 +306,28 @@ func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
 		failure(w, r, err)
 	default:
 		writeJSON(w, http.StatusOK, t)
+	}
+}
+
+func (s *Server) handleDeleteTenantType(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service(w, r)
+	if !ok {
+		return
+	}
+	if !people.ValidID(r.PathValue("tenant")) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name a tenant")
+		return
+	}
+	err := s.Types.DeleteTenant(r.Context(), service, r.PathValue("tenant"), r.PathValue("type"))
+	switch {
+	case errors.Is(err, types.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_type", err.Error())
+	case errors.Is(err, types.ErrNotOwner):
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+	case err != nil:
+		failure(w, r, err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

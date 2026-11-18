@@ -727,3 +727,120 @@ func TestADeletedItemsEventsCarryNoItem(t *testing.T) {
 		}
 	}
 }
+
+// tenantType puts or deletes a tenant's version of a type, and returns the status and error code.
+func (h *harness) tenantType(method, service, tenant string, def map[string]any) (int, string) {
+	h.t.Helper()
+	raw, _ := json.Marshal(def)
+	req, _ := http.NewRequest(method, h.url+"/internal/v1/types/"+def["id"].(string)+"/tenants/"+tenant, bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+service)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out := map[string]any{}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	code, _ := out["error"].(string)
+	return resp.StatusCode, code
+}
+
+func (h *harness) typeLabel(token, id string) string {
+	h.t.Helper()
+	_, out := h.request(token, "GET", "/v1/types", nil)
+	for _, raw := range out["types"].([]any) {
+		if ty := raw.(map[string]any); ty["id"] == id {
+			return ty["label"].(string)
+		}
+	}
+	return ""
+}
+
+// copied deep-copies a fixture, so a test can change nested parts.
+func copied(def map[string]any) map[string]any {
+	raw, _ := json.Marshal(def)
+	out := map[string]any{}
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func TestAModuleTailorsATypeForOneTenant(t *testing.T) {
+	h := newHarness(t)
+	h.types()
+	// acme's pack: its own words, a budget field, and a budget needed before a send.
+	acmes := copied(presales)
+	acmes["label"] = "售前方案"
+	props := acmes["fields"].(map[string]any)["properties"].(map[string]any)
+	props["when"].(map[string]any)["title"] = "什么时候要"
+	props["budget"] = map[string]any{"type": "integer", "title": "预算"}
+	acmes["states"].(map[string]any)["sent"].(map[string]any)["label"] = "已发出"
+	acmes["offers"].(map[string]any)["send"].(map[string]any)["requires"] = []any{"what", "for_whom", "budget"}
+	acmes["transitions"].([]any)[0].(map[string]any)["label"] = "交付"
+
+	if got, code := h.tenantType("PUT", "t10-property", acme, acmes); got != http.StatusForbidden {
+		t.Errorf("another module = %d %s", got, code)
+	}
+	if got, code := h.tenantType("PUT", "t10-sales", "not a tenant", acmes); got != http.StatusBadRequest {
+		t.Errorf("a bad tenant = %d %s", got, code)
+	}
+	if got, code := h.tenantType("PUT", "t10-sales", acme, with(acmes, map[string]any{"version": 2})); got != http.StatusConflict || code != "type_default_missing" {
+		t.Errorf("a version with no default = %d %s", got, code)
+	}
+	for name, change := range map[string]func(map[string]any){
+		"a phase": func(d map[string]any) { d["states"].(map[string]any)["sent"].(map[string]any)["phase"] = "doing" },
+		"a new state": func(d map[string]any) {
+			d["states"].(map[string]any)["paused"] = map[string]any{"phase": "doing", "label": "Paused"}
+		},
+		"who moves":    func(d map[string]any) { d["transitions"].([]any)[0].(map[string]any)["by"] = "creator" },
+		"where to":     func(d map[string]any) { d["offers"].(map[string]any)["accept"].(map[string]any)["to"] = "delivered" },
+		"the profile":  func(d map[string]any) { d["visibility"] = "team"; d["departure"] = "reassign" },
+		"a lost field": func(d map[string]any) { delete(d["fields"].(map[string]any)["properties"].(map[string]any), "what") },
+		"a field shape": func(d map[string]any) {
+			d["fields"].(map[string]any)["properties"].(map[string]any)["when"].(map[string]any)["maxLength"] = 10
+		},
+		"the subject": func(d map[string]any) { d["subject"] = []any{"sales:deal"} },
+	} {
+		bad := copied(acmes)
+		change(bad)
+		if got, code := h.tenantType("PUT", "t10-sales", acme, bad); got != http.StatusBadRequest || code != "invalid_type" {
+			t.Errorf("changing %s = %d %s", name, got, code)
+		}
+	}
+
+	if got, code := h.tenantType("PUT", "t10-sales", acme, acmes); got != http.StatusOK {
+		t.Fatalf("tailor = %d %s", got, code)
+	}
+	if got := h.typeLabel(acme+"/ada", "sales.presales"); got != "售前方案" {
+		t.Errorf("acme sees %q", got)
+	}
+	if got := h.typeLabel(globex+"/gus", "sales.presales"); got != "Presales" {
+		t.Errorf("globex sees %q", got)
+	}
+	// acme's send needs a budget; its items take the new field.
+	item := h.ask("ada")
+	h.wantError("ada", "POST", "/v1/work-items/"+item+"/send", map[string]any{"to": "bob"}, http.StatusUnprocessableEntity, "requirements_unmet")
+	h.want("ada", "PATCH", "/v1/work-items/"+item, map[string]any{"version": 1, "fields": map[string]any{"budget": 5000}}, http.StatusOK)
+	h.send("ada", item, "bob", "transfer")
+
+	// A newer default puts the tenant back on it until the module tailors that one.
+	if got, code := h.pushType("t10-sales", with(presales, map[string]any{"version": 2, "label": "Presales v2"})); got != http.StatusOK {
+		t.Fatalf("push v2 = %d %s", got, code)
+	}
+	if got := h.typeLabel(acme+"/ada", "sales.presales"); got != "Presales v2" {
+		t.Errorf("after a new default acme sees %q", got)
+	}
+	if got, code := h.tenantType("PUT", "t10-sales", acme, with(acmes, map[string]any{"version": 2})); got != http.StatusOK {
+		t.Fatalf("tailor v2 = %d %s", got, code)
+	}
+	if got := h.typeLabel(acme+"/ada", "sales.presales"); got != "售前方案" {
+		t.Errorf("after tailoring v2 acme sees %q", got)
+	}
+	for range 2 {
+		if got, code := h.tenantType("DELETE", "t10-sales", acme, acmes); got != http.StatusNoContent {
+			t.Fatalf("delete = %d %s", got, code)
+		}
+	}
+	if got := h.typeLabel(acme+"/ada", "sales.presales"); got != "Presales v2" {
+		t.Errorf("after delete acme sees %q", got)
+	}
+}
