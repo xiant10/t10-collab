@@ -28,7 +28,19 @@ import (
 	"t10-collab/verifier"
 )
 
+// version is the commit the image was built from, set by the Dockerfile's VERSION.
+var version = "dev"
+
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "docs" {
+		// Only /docs/mcp, with no database or auth-server, for the workspace's docs
+		// contract suite (contracts/docs/conformance.ts).
+		if err := serveDocs(os.Args[2]); err != nil {
+			slog.Error("t10-collab docs stopped", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		slog.Error("t10-collab stopped", "error", err)
 		os.Exit(1)
@@ -55,6 +67,10 @@ func run() error {
 		}
 	}()
 
+	docs, err := server.Docs(version)
+	if err != nil {
+		return err
+	}
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -74,6 +90,7 @@ func run() error {
 	api := server.New(server.Deps{
 		Pool: pool, Verifier: tokens, Org: org, Admins: roles.New(cfg.AuthURL, org.ServiceToken, org), Items: items, Types: types.NewStore(pool),
 		Offers: offers.NewService(pool, org, items), Lists: lists.NewService(pool, org), Activity: activity.NewService(pool),
+		Docs: docs,
 	})
 	go sweep.New(pool, org).Run(ctx)
 	go events.New(pool, cfg.AutomationsURL, org.ServiceToken).Run(ctx)
@@ -95,4 +112,14 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+func serveDocs(addr string) error {
+	docs, err := server.Docs(version)
+	if err != nil {
+		return err
+	}
+	slog.Info("serving docs only", "addr", addr)
+	srv := &http.Server{Addr: addr, Handler: server.New(server.Deps{Docs: docs}).Handler(), ReadHeaderTimeout: 5 * time.Second}
+	return srv.ListenAndServe()
 }
