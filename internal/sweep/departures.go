@@ -13,6 +13,7 @@ import (
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
 	"t10-collab/internal/policy"
+	"t10-collab/internal/types"
 	"t10-collab/internal/workitems"
 )
 
@@ -153,9 +154,17 @@ func settle(ctx context.Context, tx pgx.Tx, c policy.Caller, r roster, id string
 	if held {
 		return workitems.Unqueue(ctx, tx, c.TenantID, id)
 	}
+	if item.Departure == types.DepartureCancel {
+		return workitems.CancelDeparted(ctx, tx, c, item, gone)
+	}
 	next, err := successor(ctx, tx, c.TenantID, item, gone, r)
 	if err != nil {
 		return err
+	}
+	if next == "" && item.Departure == types.DepartureCreator {
+		// Nobody else may be asked, so it ends rather than waiting in a queue
+		// whose admin would have to hand it to someone who can't read it.
+		return workitems.CancelDeparted(ctx, tx, c, item, gone)
 	}
 	if next == "" {
 		return workitems.Enqueue(ctx, tx, c, id, workitems.ReasonNoSuccessor)
@@ -167,7 +176,7 @@ func settle(ctx context.Context, tx pgx.Tx, c policy.Caller, r roster, id string
 }
 
 // successor picks who the sweep offers an item to next: its creator, then the
-// manager of each departed owner. It's empty once a successor has declined, which
+// manager of each departed owner, unless the item's type allows only its creator. It's empty once a successor has declined, which
 // is a real answer, or when nobody is left to ask. An offer that went unanswered
 // or was voided just moves on to the next person.
 func successor(ctx context.Context, tx pgx.Tx, tenantID string, item workitems.Item, gone []string, r roster) (string, error) {
@@ -195,7 +204,9 @@ func successor(ctx context.Context, tx pgx.Tx, tenantID string, item workitems.I
 	}
 	candidates := []string{item.CreatorID}
 	for _, owner := range gone {
-		candidates = append(candidates, r[owner].ManagerUserID)
+		if item.Departure == types.DepartureReassign {
+			candidates = append(candidates, r[owner].ManagerUserID)
+		}
 	}
 	for _, id := range candidates {
 		if !asked[id] && r.is(id, people.Member.Active) {

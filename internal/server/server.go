@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -24,6 +26,7 @@ import (
 	"t10-collab/internal/policy"
 	"t10-collab/internal/roles"
 	"t10-collab/internal/telemetry"
+	"t10-collab/internal/types"
 	"t10-collab/internal/workitems"
 	"t10-collab/verifier"
 )
@@ -35,6 +38,8 @@ const (
 	// notifyService is the only service allowed to read attention counts.
 	notifyService  = "t10-notify"
 	attentionRoute = "/internal/v1/attention"
+	// typeRoute is where an owning module pushes its item types.
+	typeRoute = "/internal/v1/types/{type}"
 	// attentionWindow is how far back counts look when a caller names no time.
 	attentionWindow = 24 * time.Hour
 )
@@ -42,7 +47,7 @@ const (
 // manifest tells a client this module is here and what it can rely on. Routes
 // and fields can only be added within an api_version.
 var manifest = map[string]any{
-	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention"},
+	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention", "item_types"},
 	// trigger_events are the kinds this posts to t10-automations, each about one
 	// agent account, which an automation can fire on.
 	"trigger_events": []string{"work.offered", "work.assigned", "work.accepted", "work.declined", "work.commented", "list.item_added"},
@@ -77,6 +82,7 @@ type Deps struct {
 	Offers   *offers.Service
 	Lists    *lists.Service
 	Activity *activity.Service
+	Types    *types.Store
 }
 
 // Server handles the API.
@@ -136,6 +142,8 @@ func (s *Server) routes() []route {
 		{"PUT", "/v1/lists/{id}/holding", policy.ActionWrite, s.handleHolding(true)},
 		{"DELETE", "/v1/lists/{id}/holding", policy.ActionWrite, s.handleHolding(false)},
 
+		{"GET", "/v1/types", policy.ActionRead, s.handleListTypes},
+
 		{"GET", "/v1/people", policy.ActionRead, s.handlePeople},
 		{"GET", "/v1/units", policy.ActionRead, s.handleUnits},
 
@@ -169,6 +177,8 @@ func (s *Server) Handler() http.Handler {
 	}
 	key := "GET " + attentionRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleAttention)))
+	key = "PUT " + typeRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handlePutType)))
 	key = "POST " + mcpRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleMCP)))
 	return logged(mux)
@@ -240,6 +250,62 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, counts)
+}
+
+// handlePutType takes an item type's default from the module that owns it,
+// with that module's service token. Errors carry their detail, because they
+// describe the module's own declaration, never a record.
+func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		unauthorized(w)
+		return
+	}
+	who, err := s.Verifier.Verify(r.Context(), raw)
+	if err != nil {
+		unauthorized(w)
+		return
+	}
+	if who.ServiceID == "" {
+		writeError(w, http.StatusForbidden, "forbidden", "this token can't use this route")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "the body is too large")
+		return
+	}
+	d, err := types.Parse(body)
+	if err == nil && d.ID != r.PathValue("type") {
+		err = fmt.Errorf("%w: the body's id must match the path", types.ErrInvalid)
+	}
+	var t types.Type
+	if err == nil {
+		t, err = s.Types.Put(r.Context(), who.ServiceID, d)
+	}
+	switch {
+	case errors.Is(err, types.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_type", err.Error())
+	case errors.Is(err, types.ErrNotOwner):
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+	case errors.Is(err, types.ErrStale):
+		writeError(w, http.StatusConflict, "type_version_stale", err.Error())
+	case errors.Is(err, types.ErrFixed):
+		writeError(w, http.StatusConflict, "type_fixed", err.Error())
+	case err != nil:
+		failure(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, t)
+	}
+}
+
+func (s *Server) handleListTypes(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	found, err := s.Types.List(r.Context(), c.TenantID)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"types": found})
 }
 
 func unauthorized(w http.ResponseWriter) {
@@ -322,6 +388,9 @@ func classify(err error) (status int, code, message string) {
 		{workitems.ErrClosed, http.StatusConflict, "item_closed"},
 		{workitems.ErrListArchived, http.StatusConflict, "list_archived"},
 		{workitems.ErrTooManyLinks, http.StatusConflict, "too_many_links"},
+		{workitems.ErrNotForType, http.StatusConflict, "not_for_type"},
+		{types.ErrInvalid, http.StatusBadRequest, "invalid_request"},
+		{types.ErrUnknown, http.StatusUnprocessableEntity, "unknown_type"},
 		{lists.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 		{lists.ErrBadPerson, http.StatusUnprocessableEntity, "invalid_recipient"},
 		{lists.ErrBadUnit, http.StatusUnprocessableEntity, "invalid_unit"},
@@ -400,6 +469,7 @@ func (s *Server) handleListItems(w http.ResponseWriter, r *http.Request, c polic
 	q := r.URL.Query()
 	f := workitems.Filter{
 		View: q.Get("view"), Status: q.Get("status"), ListID: q.Get("list"), Query: q.Get("q"), Cursor: q.Get("cursor"), Limit: n,
+		Type: q.Get("type"), Module: q.Get("module"), Subject: q.Get("subject"),
 	}
 	for key, into := range map[string]**time.Time{"due_from": &f.DueFrom, "due_before": &f.DueBefore} {
 		if raw := q.Get(key); raw != "" {

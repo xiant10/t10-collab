@@ -93,6 +93,7 @@ Tests need a throwaway Postgres, because they drop the `collab` schema. Without 
 | Package | Owns |
 | --- | --- |
 | `internal/workitems` | Items, status, owners, collaborators, comments |
+| `internal/types` | Item types modules declare, see [`docs/types.md`](docs/types.md) |
 | `internal/offers` | Sending, accepting, declining, withdrawing |
 | `internal/lists` | Shared lists, their members and their unit links |
 | `internal/sweep` | The 15-minute job: team-linked lists, and moving work from people who leave |

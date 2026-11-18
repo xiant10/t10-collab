@@ -87,6 +87,43 @@ paths:
                   declined: {type: integer}
                   waiting_offers: {type: integer}
         default: {$ref: "#/components/responses/Error"}
+  /internal/v1/types/{type}:
+    put:
+      summary: Declare an item type's default, from the module that owns it
+      description: >-
+        Only the owning module's service token, t10-<module> for a type <module>.<name>, can call this. The
+        same version and definition again is a no-op, so every replica can push at start. A lower version, or
+        the same one with a different definition, answers type_version_stale. visibility and departure can
+        never change for a type ID. Parts not built yet, such as states, are refused. See docs/types.md.
+      operationId: putType
+      parameters:
+        - {name: type, in: path, required: true, schema: {type: string}, description: "<module>.<name>; must match the body's id"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TypeDefinition"}
+      responses:
+        "200":
+          description: The type as stored
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Type"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/types:
+    get:
+      summary: The item types in the caller's tenant, collab.task first
+      operationId: listTypes
+      responses:
+        "200":
+          description: Every type, so a client can draw any item's fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  types: {type: array, items: {$ref: "#/components/schemas/Type"}}
+        default: {$ref: "#/components/responses/Error"}
   /v1/work-items:
     post:
       summary: Create an item, optionally sending it at once
@@ -109,6 +146,9 @@ paths:
         - {name: q, in: query, schema: {type: string, maxLength: 300}, description: Part of the title, ignoring case}
         - {name: due_from, in: query, schema: {type: string, format: date-time}, description: Due at or after this. Leaves out items with no due date}
         - {name: due_before, in: query, schema: {type: string, format: date-time}, description: Due before this. Leaves out items with no due date}
+        - {name: type, in: query, schema: {type: string}, description: Only items of this type, such as collab.task}
+        - {name: module, in: query, schema: {type: string}, description: Only items of this module's types}
+        - {name: subject, in: query, schema: {type: string}, description: "Only items about this record, <module>:<type>:<id>"}
         - {$ref: "#/components/parameters/limit"}
         - {$ref: "#/components/parameters/cursor"}
       responses:
@@ -185,6 +225,7 @@ paths:
                 priority: {$ref: "#/components/schemas/Priority"}
                 status: {$ref: "#/components/schemas/Status"}
                 due_at: {type: [string, "null"], format: date-time}
+                fields: {type: object, description: "Merged into the type's values; null clears a key. Only fields the type declares now can be written"}
       responses:
         "200": {$ref: "#/components/responses/Item"}
         default: {$ref: "#/components/responses/Error"}
@@ -890,6 +931,40 @@ components:
         send: {$ref: "#/components/schemas/Send"}
         list_id: {type: string, description: Puts the item on a list the caller is on}
         unowned: {type: boolean, description: Starts a list item with no owner}
+        type: {type: string, description: "A module's item type, <module>.<name>; collab.task when left out"}
+        fields: {type: object, description: "The type's values, checked against it"}
+        subject_ref: {type: string, maxLength: 300, description: "The record it's about, <module>:<type>:<id>, of a kind the type takes"}
+    TypeField:
+      type: object
+      required: [type]
+      properties:
+        type: {type: string, enum: [string, integer, number, boolean]}
+        title: {type: string, maxLength: 100}
+        maxLength: {type: integer, maximum: 20000, description: For strings; 2000 when left out}
+        enum: {type: array, maxItems: 100, items: {}}
+    TypeDefinition:
+      type: object
+      required: [id, owner_module, version, label]
+      properties:
+        id: {type: string, description: "<module>.<name>"}
+        owner_module: {type: string}
+        version: {type: integer, minimum: 1}
+        label: {type: string, maxLength: 100}
+        fields:
+          type: object
+          properties:
+            type: {type: string, enum: [object]}
+            properties: {type: object, additionalProperties: {$ref: "#/components/schemas/TypeField"}}
+            order: {type: array, items: {type: string}, description: The order clients show fields in; the declared order when left out}
+        subject: {type: array, maxItems: 20, items: {type: string}, description: "Kinds of record an item can be about, <module>:<type>"}
+        visibility: {type: string, enum: [team, participants], default: team}
+        departure: {type: string, enum: [reassign, creator, cancel], description: "reassign by default; creator for participants, which can't reassign"}
+    Type:
+      allOf:
+        - {$ref: "#/components/schemas/TypeDefinition"}
+        - type: object
+          properties:
+            updated_at: {type: string, format: date-time}
     List:
       type: object
       properties:
@@ -1009,6 +1084,11 @@ components:
         links: {type: array, items: {$ref: "#/components/schemas/Link"}}
         stage: {type: string, description: Its stage on its list's workflow; left out off it}
         rounds: {type: integer, description: Times it went back since it was started or put at a stage}
+        type: {type: string, description: collab.task unless a module's}
+        type_version: {type: integer, description: The type version it was last written under}
+        fields: {type: object, description: "The type's values, including any an earlier version declared, which are read-only"}
+        subject_ref: {type: string, description: "The record it's about; holding it grants nothing"}
+        visibility: {type: string, enum: [team, participants], description: "participants: only its creator, owners and the recipient of a pending offer read it"}
         workflow:
           type: object
           description: On a single read of an item on a list with a workflow
@@ -1080,6 +1160,11 @@ components:
         - too_many_links
         - managed_by_unit
         - not_accepting
+        - not_for_type
+        - unknown_type
+        - invalid_type
+        - type_version_stale
+        - type_fixed
         - not_found
         - not_on_list
         - holder_not_accepting

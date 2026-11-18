@@ -23,6 +23,7 @@ import (
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
 	"t10-collab/internal/policy"
+	"t10-collab/internal/types"
 	"t10-collab/internal/workitems"
 	"t10-collab/verifier"
 )
@@ -38,6 +39,8 @@ func (tokens) Verify(_ context.Context, raw string) (*verifier.Identity, error) 
 		return &verifier.Identity{ServiceID: "other"}, nil
 	case "notify":
 		return &verifier.Identity{ServiceID: notifyService}, nil
+	case "t10-sales", "t10-property":
+		return &verifier.Identity{ServiceID: raw}, nil
 	case "platform-admin":
 		return &verifier.Identity{UserID: "usr_root"}, nil
 	case "agent":
@@ -178,6 +181,7 @@ func newHarness(t *testing.T) *harness {
 	s := New(Deps{
 		Pool: pool, Verifier: tokens{}, Org: o, Items: items,
 		Offers: offers.NewService(pool, o, items), Lists: lists.NewService(pool, o), Activity: activity.NewService(pool),
+		Types: types.NewStore(pool),
 	})
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)

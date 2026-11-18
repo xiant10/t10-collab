@@ -29,10 +29,11 @@ Users see these as "tasks".
 
 | Method and path | Does |
 | --- | --- |
-| `POST /v1/work-items` | Create an item owned by the caller. With `send`, also send it. With `list_id`, put it on a list the caller is on, and with `unowned: true` leave it there for any member to claim |
-| `GET /v1/work-items` | Items the caller can see. Filters: `view` (`owned`, `sent`, `collaborating`, `list` with `list`, `reports`, `claimable`), `status` (`todo`, `doing`, `done`, `cancelled`, or `open` for the first two), `q` (title contains), `due_from`, `due_before` |
+| `POST /v1/work-items` | Create an item owned by the caller. With `send`, also send it. With `list_id`, put it on a list the caller is on, and with `unowned: true` leave it there for any member to claim. `type`, `fields` and `subject_ref` make it a module's [typed item](types.md) |
+| `GET /v1/work-items` | Items the caller can see. Filters: `view` (`owned`, `sent`, `collaborating`, `list` with `list`, `reports`, `claimable`), `status` (`todo`, `doing`, `done`, `cancelled`, or `open` for the first two), `q` (title contains), `due_from`, `due_before`, `type`, `module`, `subject` |
 | `GET /v1/work-items/{id}` | One item, plus `can` (what the caller may do), `pending_offers`, `working` (agents expected to act on it now), `mention` (the latest comment that named the caller) and, on a list with a workflow, `workflow` |
-| `PATCH /v1/work-items/{id}` | Change `title`, `description`, `priority`, `status` or `due_at` (null clears it). Needs `version` |
+| `PATCH /v1/work-items/{id}` | Change `title`, `description`, `priority`, `status`, `due_at` (null clears it) or `fields` (merged; null clears a key). Needs `version` |
+| `GET /v1/types` | The [item types](types.md) in the caller's tenant, `collab.task` first, so a client can draw any item's fields |
 | `DELETE /v1/work-items/{id}` | Soft delete, for any owner, or the creator of an unowned list item |
 | `GET /v1/work-items/{id}/events` | Its history, oldest first |
 | `POST /v1/work-items/{id}/claim` | Claim an unowned list item |
@@ -138,6 +139,7 @@ These need a tenant admin, or a member holding `work:admin` from `auth-server`.
 | --- | --- |
 | `GET /v1/module` | The manifest: `id: collab`, `api_version: 1`, `action_prefix: work`, `features`, and `trigger_events`, the event kinds automations can fire on |
 | `GET /internal/v1/attention?tenant=&user=&since=` | Counts for `t10-notify`'s digest, such as offers to answer and items overdue, with no titles or names. Only `t10-notify`'s service token may call it |
+| `PUT /internal/v1/types/{type}` | A module declares an [item type](types.md). Only the owning module's service token, `t10-<module>`, may call it |
 
 ## Agent tools (MCP)
 
@@ -216,6 +218,9 @@ The payload holds IDs only. A run reads the item through its own tools.
 | `offer_exists`, `offer_not_pending`, `client_ref_reused` | 409 | An offer is already pending, it's already answered, or the `client_ref` was used for something else |
 | `not_on_workflow`, `no_way_back`, `cant_skip` | 409 | Workflow moves that don't apply |
 | `too_many_links` | 409 | The item has 20 links |
+| `not_for_type` | 409 | The item's type doesn't allow it, such as a list or collaborator on a `participants` item |
+| `unknown_type` | 422 | No such item type in this tenant |
+| `invalid_type`, `type_version_stale`, `type_fixed` | 400, 409 | On `PUT /internal/v1/types/{type}`: a bad definition, a version that isn't newer, or a changed `visibility` or `departure` |
 | `agent_loop` | 409 | Agents have passed it on too often, and the sending agent has no manager to send it to instead |
 | `rate_limited` | 429 | Too many sends this hour |
 | `org_unavailable` | 503 | `auth-server` couldn't answer an org question |

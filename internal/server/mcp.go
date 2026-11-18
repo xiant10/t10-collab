@@ -139,19 +139,28 @@ func (s *Server) tools() []tool {
 				"status":  choice("Only items in this status", workitems.StatusTodo, workitems.StatusDoing, workitems.StatusDone, workitems.StatusCancelled),
 				"list_id": text("The shared list to read, needed with view list"),
 				"due":     choice("Only items past their due date and still open (overdue), or due in the next 24 hours (soon)", dueOverdue, dueSoon),
+				"type":    text("Only items of this type, as <module>.<name>"),
+				"module":  text("Only items of this module's types, by module ID"),
+				"subject": text("Only items about this record, as <module>:<type>:<id>"),
 			})),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				View   string `json:"view"`
-				Status string `json:"status"`
-				ListID string `json:"list_id"`
-				Due    string `json:"due"`
+				View    string `json:"view"`
+				Status  string `json:"status"`
+				ListID  string `json:"list_id"`
+				Due     string `json:"due"`
+				Type    string `json:"type"`
+				Module  string `json:"module"`
+				Subject string `json:"subject"`
 				pageArgs
 			}) (any, error) {
 				n, err := pageSize(a.Limit)
 				if err != nil {
 					return nil, err
 				}
-				f := workitems.Filter{View: a.View, Status: a.Status, ListID: a.ListID, Cursor: a.Cursor, Limit: n}
+				f := workitems.Filter{
+					View: a.View, Status: a.Status, ListID: a.ListID, Cursor: a.Cursor, Limit: n,
+					Type: a.Type, Module: a.Module, Subject: a.Subject,
+				}
 				if err := dueFilter(&f, a.Due, time.Now()); err != nil {
 					return nil, err
 				}
@@ -275,19 +284,26 @@ func (s *Server) tools() []tool {
 				"unowned":      map[string]any{"type": "boolean", "description": "With list_id: leave it for any list member to claim"},
 				"suggest_to":   text("The user ID it should go to, from work_people, for the user to confirm"),
 				"suggest_note": text("With suggest_to: the note to send with it"),
+				"type":         text("A module's item type, as <module>.<name>, from work_get or the module. Leave out for a plain task"),
+				"fields":       map[string]any{"type": "object", "description": "With type: the type's field values, by key"},
+				"subject_ref":  text("The record it's about, as <module>:<type>:<id>"),
 			}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				Title       string     `json:"title"`
-				Description string     `json:"description"`
-				Priority    string     `json:"priority"`
-				DueAt       *time.Time `json:"due_at"`
-				ListID      string     `json:"list_id"`
-				Unowned     bool       `json:"unowned"`
-				SuggestTo   string     `json:"suggest_to"`
-				SuggestNote string     `json:"suggest_note"`
+				Title       string         `json:"title"`
+				Description string         `json:"description"`
+				Priority    string         `json:"priority"`
+				DueAt       *time.Time     `json:"due_at"`
+				ListID      string         `json:"list_id"`
+				Unowned     bool           `json:"unowned"`
+				SuggestTo   string         `json:"suggest_to"`
+				SuggestNote string         `json:"suggest_note"`
+				Type        string         `json:"type"`
+				Fields      map[string]any `json:"fields"`
+				SubjectRef  string         `json:"subject_ref"`
 			}) (any, error) {
 				item, err := s.Items.Create(ctx, c, workitems.NewItem{
 					Title: a.Title, Description: a.Description, Priority: a.Priority, DueAt: a.DueAt, ListID: a.ListID, Unowned: a.Unowned,
+					Type: a.Type, Fields: a.Fields, SubjectRef: a.SubjectRef,
 				}, nil)
 				if err == nil && a.SuggestTo == "" {
 					return s.Offers.StartNew(ctx, c, item)
@@ -326,6 +342,7 @@ func (s *Server) tools() []tool {
 				"priority":    choice("The new priority", "low", "normal", "high"),
 				"status":      choice("The new status", workitems.StatusTodo, workitems.StatusDoing, workitems.StatusDone, workitems.StatusCancelled),
 				"due_at":      map[string]any{"type": []string{"string", "null"}, "description": "The new due time, as an RFC 3339 time, or null to clear it"},
+				"fields":      map[string]any{"type": "object", "description": "For a typed item: field values to change, by key. null clears one"},
 			}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				ID string `json:"id"`

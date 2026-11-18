@@ -16,6 +16,7 @@ How the code works and how to change it safely. [`design.md`](design.md) is the 
 | `internal/db` | The pool, and embedded migrations applied at start under an advisory lock |
 | `internal/policy` | `Caller`, every access rule (`Relation.CanRead`, `CanEdit`, `CanSend`…), and `VisibleSQL`, the read rule as a SQL filter |
 | `internal/workitems` | Items, status, owners, collaborators, comments, links, suggestions |
+| `internal/types` | Item types modules declare: definitions, field checks, the store. See [`types.md`](types.md) |
 | `internal/offers` | Sends, accepts, declines, withdrawals, the agent-loop redirect, and workflow moves (`workflow.go`) |
 | `internal/lists` | Shared lists, members, unit links, workflows and stage holders |
 | `internal/activity` | `Record` (event, notifications and outbox rows in one call), item history, the notification feed, agent hop counts |
