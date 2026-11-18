@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -24,6 +26,7 @@ import (
 	"t10-collab/internal/policy"
 	"t10-collab/internal/roles"
 	"t10-collab/internal/telemetry"
+	"t10-collab/internal/types"
 	"t10-collab/internal/workitems"
 	"t10-collab/verifier"
 )
@@ -35,6 +38,12 @@ const (
 	// notifyService is the only service allowed to read attention counts.
 	notifyService  = "t10-notify"
 	attentionRoute = "/internal/v1/attention"
+	// typeRoute is where an owning module pushes its item types.
+	typeRoute = "/internal/v1/types/{type}"
+	// tenantTypeRoute is where an owning module tailors a type for one tenant.
+	tenantTypeRoute = "/internal/v1/types/{type}/tenants/{tenant}"
+	// feedRoute is where an owning module reads the events about its types.
+	feedRoute = "/internal/v1/events"
 	// attentionWindow is how far back counts look when a caller names no time.
 	attentionWindow = 24 * time.Hour
 )
@@ -42,7 +51,7 @@ const (
 // manifest tells a client this module is here and what it can rely on. Routes
 // and fields can only be added within an api_version.
 var manifest = map[string]any{
-	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention"},
+	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention", "item_types"},
 	// trigger_events are the kinds this posts to t10-automations, each about one
 	// agent account, which an automation can fire on.
 	"trigger_events": []string{"work.offered", "work.assigned", "work.accepted", "work.declined", "work.commented", "list.item_added"},
@@ -77,6 +86,7 @@ type Deps struct {
 	Offers   *offers.Service
 	Lists    *lists.Service
 	Activity *activity.Service
+	Types    *types.Store
 }
 
 // Server handles the API.
@@ -107,6 +117,7 @@ func (s *Server) routes() []route {
 		{"DELETE", "/v1/work-items/{id}", policy.ActionDelete, s.handleDeleteItem},
 		{"GET", "/v1/work-items/{id}/events", policy.ActionRead, s.handleItemEvents},
 		{"POST", "/v1/work-items/{id}/claim", policy.ActionWrite, s.handleClaim},
+		{"POST", "/v1/work-items/{id}/transition", policy.ActionWrite, s.handleTransition},
 		{"PUT", "/v1/work-items/{id}/list", policy.ActionWrite, s.handleSetList},
 		{"DELETE", "/v1/work-items/{id}/owners/me", policy.ActionWrite, s.handleStopOwning},
 		{"PUT", "/v1/work-items/{id}/collaborators/{user}", policy.ActionWrite, s.handleAddCollaborator},
@@ -135,6 +146,8 @@ func (s *Server) routes() []route {
 		{"DELETE", "/v1/lists/{id}/workflow", policy.ActionWrite, s.handleRemoveWorkflow},
 		{"PUT", "/v1/lists/{id}/holding", policy.ActionWrite, s.handleHolding(true)},
 		{"DELETE", "/v1/lists/{id}/holding", policy.ActionWrite, s.handleHolding(false)},
+
+		{"GET", "/v1/types", policy.ActionRead, s.handleListTypes},
 
 		{"GET", "/v1/people", policy.ActionRead, s.handlePeople},
 		{"GET", "/v1/units", policy.ActionRead, s.handleUnits},
@@ -169,6 +182,14 @@ func (s *Server) Handler() http.Handler {
 	}
 	key := "GET " + attentionRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleAttention)))
+	key = "PUT " + typeRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handlePutType)))
+	key = "PUT " + tenantTypeRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handlePutType)))
+	key = "DELETE " + tenantTypeRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleDeleteTenantType)))
+	key = "GET " + feedRoute
+	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleModuleFeed)))
 	key = "POST " + mcpRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleMCP)))
 	return logged(mux)
@@ -240,6 +261,132 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, counts)
+}
+
+// handlePutType takes an item type's default, or one tenant's version of it,
+// from the module that owns it, with that module's service token. Errors carry their detail, because they
+// describe the module's own declaration, never a record.
+func (s *Server) handlePutType(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service(w, r)
+	if !ok {
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "the body is too large")
+		return
+	}
+	d, err := types.Parse(body)
+	if err == nil && d.ID != r.PathValue("type") {
+		err = fmt.Errorf("%w: the body's id must match the path", types.ErrInvalid)
+	}
+	tenant := r.PathValue("tenant")
+	var t types.Type
+	switch {
+	case err != nil:
+	case r.Pattern == "PUT "+tenantTypeRoute && !people.ValidID(tenant):
+		err = fmt.Errorf("%w: name a tenant", types.ErrInvalid)
+	case r.Pattern == "PUT "+tenantTypeRoute:
+		t, err = s.Types.PutTenant(r.Context(), service, tenant, d)
+	default:
+		t, err = s.Types.Put(r.Context(), service, d)
+	}
+	switch {
+	case errors.Is(err, types.ErrNoDefault):
+		writeError(w, http.StatusConflict, "type_default_missing", err.Error())
+	case errors.Is(err, types.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_type", err.Error())
+	case errors.Is(err, types.ErrNotOwner):
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+	case errors.Is(err, types.ErrStale):
+		writeError(w, http.StatusConflict, "type_version_stale", err.Error())
+	case errors.Is(err, types.ErrFixed):
+		writeError(w, http.StatusConflict, "type_fixed", err.Error())
+	case err != nil:
+		failure(w, r, err)
+	default:
+		writeJSON(w, http.StatusOK, t)
+	}
+}
+
+func (s *Server) handleDeleteTenantType(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service(w, r)
+	if !ok {
+		return
+	}
+	if !people.ValidID(r.PathValue("tenant")) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name a tenant")
+		return
+	}
+	err := s.Types.DeleteTenant(r.Context(), service, r.PathValue("tenant"), r.PathValue("type"))
+	switch {
+	case errors.Is(err, types.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_type", err.Error())
+	case errors.Is(err, types.ErrNotOwner):
+		writeError(w, http.StatusForbidden, "forbidden", err.Error())
+	case err != nil:
+		failure(w, r, err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// service admits a service's own token, and returns the service's name.
+func (s *Server) service(w http.ResponseWriter, r *http.Request) (string, bool) {
+	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		unauthorized(w)
+		return "", false
+	}
+	who, err := s.Verifier.Verify(r.Context(), raw)
+	if err != nil {
+		unauthorized(w)
+		return "", false
+	}
+	if who.ServiceID == "" {
+		writeError(w, http.StatusForbidden, "forbidden", "this token can't use this route")
+		return "", false
+	}
+	return who.ServiceID, true
+}
+
+// handleModuleFeed gives a module the events about its own types' items, in
+// every tenant, with field values: the module declared the fields and holds
+// their source, so the feed shows it nothing it doesn't own the meaning of.
+// Only the module's own service token, t10-<module>, may read it.
+func (s *Server) handleModuleFeed(w http.ResponseWriter, r *http.Request) {
+	service, ok := s.service(w, r)
+	if !ok {
+		return
+	}
+	module := r.URL.Query().Get("module")
+	if types.Module(module+".x") == "" || module == "collab" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "name a module")
+		return
+	}
+	if service != "t10-"+module {
+		writeError(w, http.StatusForbidden, "forbidden", "a module reads only its own events")
+		return
+	}
+	n, ok := limit(w, r)
+	if !ok {
+		return
+	}
+	events, next, err := s.Activity.ModuleFeed(r.Context(), module, r.URL.Query().Get("after"), n)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events, "next": next})
+}
+
+func (s *Server) handleListTypes(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	found, err := s.Types.List(r.Context(), c.TenantID)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"types": found})
 }
 
 func unauthorized(w http.ResponseWriter) {
@@ -322,6 +469,12 @@ func classify(err error) (status int, code, message string) {
 		{workitems.ErrClosed, http.StatusConflict, "item_closed"},
 		{workitems.ErrListArchived, http.StatusConflict, "list_archived"},
 		{workitems.ErrTooManyLinks, http.StatusConflict, "too_many_links"},
+		{workitems.ErrNotForType, http.StatusConflict, "not_for_type"},
+		{workitems.ErrMoveNotAllowed, http.StatusConflict, "transition_not_allowed"},
+		{workitems.ErrRequirementsUnmet, http.StatusUnprocessableEntity, "requirements_unmet"},
+		{offers.ErrTypedNotOnWorkflow, http.StatusConflict, "typed_item_not_on_workflow"},
+		{types.ErrInvalid, http.StatusBadRequest, "invalid_request"},
+		{types.ErrUnknown, http.StatusUnprocessableEntity, "unknown_type"},
 		{lists.ErrInvalid, http.StatusBadRequest, "invalid_request"},
 		{lists.ErrBadPerson, http.StatusUnprocessableEntity, "invalid_recipient"},
 		{lists.ErrBadUnit, http.StatusUnprocessableEntity, "invalid_unit"},
@@ -400,6 +553,7 @@ func (s *Server) handleListItems(w http.ResponseWriter, r *http.Request, c polic
 	q := r.URL.Query()
 	f := workitems.Filter{
 		View: q.Get("view"), Status: q.Get("status"), ListID: q.Get("list"), Query: q.Get("q"), Cursor: q.Get("cursor"), Limit: n,
+		Type: q.Get("type"), Module: q.Get("module"), Subject: q.Get("subject"),
 	}
 	for key, into := range map[string]**time.Time{"due_from": &f.DueFrom, "due_before": &f.DueBefore} {
 		if raw := q.Get(key); raw != "" {
@@ -451,14 +605,20 @@ func (s *Server) handleGetItem(w http.ResponseWriter, r *http.Request, c policy.
 		failure(w, r, err)
 		return
 	}
+	moves, err := s.Items.Moves(r.Context(), c, item, relation)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, struct {
 		workitems.Item
 		Can           policy.Can          `json:"can"`
+		Moves         []workitems.Move    `json:"moves"`
 		PendingOffers []offers.Offer      `json:"pending_offers"`
 		Working       []workitems.Working `json:"working"`
 		Mention       *workitems.Mention  `json:"mention,omitempty"`
 		Workflow      *offers.Place       `json:"workflow,omitempty"`
-	}{item, relation.Can(item.Closed()), pending, working, mention, place})
+	}{item, relation.Can(item.Closed()), moves, pending, working, mention, place})
 }
 
 func (s *Server) handleAdvance(w http.ResponseWriter, r *http.Request, c policy.Caller) {
@@ -539,6 +699,19 @@ func (s *Server) handleItemEvents(w http.ResponseWriter, r *http.Request, c poli
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events, "next_cursor": next})
+}
+
+func (s *Server) handleTransition(w http.ResponseWriter, r *http.Request, c policy.Caller) {
+	var req workitems.TransitionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	item, err := s.Items.Transition(r.Context(), c, r.PathValue("id"), req)
+	if err != nil {
+		failure(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request, c policy.Caller) {

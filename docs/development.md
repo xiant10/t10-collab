@@ -16,6 +16,7 @@ How the code works and how to change it safely. [`design.md`](design.md) is the 
 | `internal/db` | The pool, and embedded migrations applied at start under an advisory lock |
 | `internal/policy` | `Caller`, every access rule (`Relation.CanRead`, `CanEdit`, `CanSend`…), and `VisibleSQL`, the read rule as a SQL filter |
 | `internal/workitems` | Items, status, owners, collaborators, comments, links, suggestions |
+| `internal/types` | Item types modules declare: definitions, field checks, the store. See [`types.md`](types.md) |
 | `internal/offers` | Sends, accepts, declines, withdrawals, the agent-loop redirect, and workflow moves (`workflow.go`) |
 | `internal/lists` | Shared lists, members, unit links, workflows and stage holders |
 | `internal/activity` | `Record` (event, notifications and outbox rows in one call), item history, the notification feed, agent hop counts |
@@ -33,7 +34,7 @@ How the code works and how to change it safely. [`design.md`](design.md) is the 
 **An agent.** `POST /mcp` speaks JSON-RPC. `tools/list` needs no token, because a harness lists tools at startup. `tools/call` verifies a delegated token and refuses:
 
 - a grant with constraints, since none are defined here;
-- a teammate-only tool (`work_send`, `work_advance`, `work_accept`, `work_decline`, `work_claim`) when the caller isn't an agent account, so an assistant acting for a person only reads and drafts (`work_suggest`);
+- a teammate-only tool (`work_send`, `work_advance`, `work_transition`, `work_accept`, `work_decline`, `work_claim`) when the caller isn't an agent account, so an assistant acting for a person only reads and drafts (`work_suggest`);
 - a tool whose action (`work:read`, `work:write`, `work:send`) the token's chain doesn't allow.
 
 The tool runs the same service code as the routes, with a `Caller` that also holds the agent's `GrantID` and `GrantChain`, so an agent can do no more than its principal. Results go back as JSON inside one `<module_record>` tag, which harnesses treat as data.

@@ -39,7 +39,10 @@ func Record(ctx context.Context, tx pgx.Tx, c policy.Caller, ch Change) error {
 	}
 	eventID := ids.New("evt")
 	_, err = tx.Exec(ctx,
-		"INSERT INTO collab.events (tenant_id, id, item_id, actor_user_id, actor_grant_id, kind, detail) VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7)",
+		// module names the module whose typed item this is, for its event feed.
+		`INSERT INTO collab.events (tenant_id, id, item_id, actor_user_id, actor_grant_id, kind, detail, module)
+		 VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7,
+		         (SELECT NULLIF(split_part(i.type, '.', 1), 'collab') FROM collab.work_items i WHERE i.tenant_id = $1 AND i.id = NULLIF($3, '')))`,
 		c.TenantID, eventID, ch.ItemID, c.UserID, c.GrantID, ch.Kind, detail)
 	if err != nil {
 		return fmt.Errorf("write event: %w", err)
@@ -265,18 +268,9 @@ func (s *Service) History(ctx context.Context, tenantID, itemID, cursor string, 
 // cursor to send next. It stops short of any transaction still running, so a
 // slow commit is delivered late rather than skipped.
 func (s *Service) Since(ctx context.Context, c policy.Caller, cursor string, limit int) ([]Notification, string, error) {
-	xid, seq := "0", int64(0)
-	if cursor != "" {
-		var seqText string
-		var ok bool
-		if xid, seqText, ok = strings.Cut(cursor, "."); !ok {
-			return nil, "", page.ErrBadCursor
-		}
-		var err error
-		seq, err = strconv.ParseInt(seqText, 10, 64)
-		if _, xidErr := strconv.ParseUint(xid, 10, 64); err != nil || xidErr != nil {
-			return nil, "", page.ErrBadCursor
-		}
+	xid, seq, err := parseCursor(cursor)
+	if err != nil {
+		return nil, "", err
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT n.id, n.read_at, n.xid::text, n.seq, e.id, COALESCE(e.item_id, ''), e.actor_user_id, COALESCE(e.actor_grant_id, ''), e.kind, e.detail, e.at
@@ -304,6 +298,98 @@ func (s *Service) Since(ctx context.Context, c policy.Caller, cursor string, lim
 		return nil, "", fmt.Errorf("list notifications: %w", err)
 	}
 	return items, next, nil
+}
+
+// parseCursor reads a feed cursor, <xid>.<seq>. Empty starts at the beginning.
+func parseCursor(cursor string) (string, int64, error) {
+	if cursor == "" {
+		return "0", 0, nil
+	}
+	xid, seqText, ok := strings.Cut(cursor, ".")
+	if !ok {
+		return "", 0, page.ErrBadCursor
+	}
+	seq, err := strconv.ParseInt(seqText, 10, 64)
+	if _, xidErr := strconv.ParseUint(xid, 10, 64); err != nil || xidErr != nil {
+		return "", 0, page.ErrBadCursor
+	}
+	return xid, seq, nil
+}
+
+// ModuleEvent is one event about a module's typed item, as its feed gives it.
+type ModuleEvent struct {
+	// Cursor is this event's place in the feed: pass the last one as after.
+	Cursor       string         `json:"cursor"`
+	ID           string         `json:"id"`
+	TenantID     string         `json:"tenant"`
+	Kind         string         `json:"kind"`
+	ItemID       string         `json:"item_id"`
+	Type         string         `json:"type"`
+	ActorUserID  string         `json:"actor"`
+	ActorGrantID string         `json:"actor_grant,omitempty"`
+	Detail       map[string]any `json:"detail"`
+	At           time.Time      `json:"at"`
+	// Item is the item as it is when the feed is read, not as it was at the
+	// event. It's left out once the item is deleted.
+	Item *ModuleItem `json:"item,omitempty"`
+}
+
+// ModuleItem is what a module's feed says about an item now.
+type ModuleItem struct {
+	Title      string         `json:"title"`
+	Status     string         `json:"status"`
+	State      string         `json:"state,omitempty"`
+	Fields     map[string]any `json:"fields"`
+	SubjectRef string         `json:"subject_ref,omitempty"`
+	CreatorID  string         `json:"creator_id"`
+	Owners     []string       `json:"owners"`
+	Version    int            `json:"version"`
+}
+
+// ModuleFeed returns the events about one module's typed items, across
+// tenants, after a cursor, oldest first, and the cursor to send next. Like
+// notifications, it stops short of any transaction still running, so a slow
+// commit arrives late rather than never. The caller must already have been
+// confirmed as the module's own service.
+func (s *Service) ModuleFeed(ctx context.Context, module, cursor string, limit int) ([]ModuleEvent, string, error) {
+	xid, seq, err := parseCursor(cursor)
+	if err != nil {
+		return nil, "", err
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT e.xid::text, e.seq, e.id, e.tenant_id, e.kind, e.item_id, i.type, e.actor_user_id, COALESCE(e.actor_grant_id, ''), e.detail, e.at,
+		        i.deleted_at IS NOT NULL, i.title, i.status, COALESCE(i.state, ''), i.fields, COALESCE(i.subject_ref, ''), i.creator_id, i.version,
+		        ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id)
+		 FROM collab.events e
+		 JOIN collab.work_items i ON i.tenant_id = e.tenant_id AND i.id = e.item_id
+		 WHERE e.module = $1
+		   AND (e.xid, e.seq) > ($2::text::xid8, $3::bigint)
+		   AND e.xid < pg_snapshot_xmin(pg_current_snapshot())
+		 ORDER BY e.xid, e.seq LIMIT $4`,
+		module, xid, seq, limit)
+	if err != nil {
+		return nil, "", fmt.Errorf("read module feed: %w", err)
+	}
+	next := cursor
+	events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (ModuleEvent, error) {
+		var e ModuleEvent
+		var rowXID string
+		var rowSeq int64
+		var deleted bool
+		var item ModuleItem
+		err := row.Scan(&rowXID, &rowSeq, &e.ID, &e.TenantID, &e.Kind, &e.ItemID, &e.Type, &e.ActorUserID, &e.ActorGrantID, &e.Detail, &e.At,
+			&deleted, &item.Title, &item.Status, &item.State, &item.Fields, &item.SubjectRef, &item.CreatorID, &item.Version, &item.Owners)
+		e.Cursor = rowXID + "." + strconv.FormatInt(rowSeq, 10)
+		next = e.Cursor
+		if !deleted {
+			e.Item = &item
+		}
+		return e, err
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("read module feed: %w", err)
+	}
+	return events, next, nil
 }
 
 // Attention is what needs one person, as counts only: digests leave t10, and

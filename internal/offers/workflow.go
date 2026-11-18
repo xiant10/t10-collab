@@ -27,6 +27,9 @@ const (
 var (
 	// ErrNotOnWorkflow means the item isn't at a stage of its list's workflow.
 	ErrNotOnWorkflow = errors.New("this item isn't at a stage of a workflow")
+	// ErrTypedNotOnWorkflow means the item's type has its own states, which a
+	// workflow's stages would fight with.
+	ErrTypedNotOnWorkflow = errors.New("an item whose type has states can't go on a workflow")
 	// ErrNoWayBack means the item's stage has nowhere to send changes back to.
 	ErrNoWayBack = errors.New("this stage only passes: it has no stage to send changes back to")
 	// ErrCantSkip means a pass asked to go to a stage it can't reach: a later
@@ -182,6 +185,9 @@ func (s *Service) PutAtStage(ctx context.Context, c policy.Caller, itemID, stage
 	if item.ListID == "" {
 		return workitems.Item{}, ErrNotOnWorkflow
 	}
+	if item.State != "" {
+		return workitems.Item{}, ErrTypedNotOnWorkflow
+	}
 	wf, err := lists.ReadWorkflow(ctx, s.pool, c.TenantID, item.ListID)
 	if err != nil {
 		return workitems.Item{}, err
@@ -222,7 +228,8 @@ func (s *Service) StartNew(ctx context.Context, c policy.Caller, item workitems.
 // StartJoined starts an item that has just joined its list, made on it or put
 // on it, at the first stage when the list's workflow starts each new item.
 func (s *Service) StartJoined(ctx context.Context, c policy.Caller, item workitems.Item) (workitems.Item, error) {
-	if item.ListID == "" || item.Stage != "" || item.Closed() {
+	// A type with states moves by its own moves, so it's never started on one.
+	if item.ListID == "" || item.Stage != "" || item.Closed() || item.State != "" {
 		return item, nil
 	}
 	wf, err := lists.ReadWorkflow(ctx, s.pool, c.TenantID, item.ListID)

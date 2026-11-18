@@ -76,8 +76,9 @@ func ManagerVisibility(ctx context.Context, q Querier, tenantID string) (string,
 // ReportsSQL is the filter for a manager's read-only view, on work_items alias i:
 // items owned by anyone in the reports placeholder. Offers, and items a report
 // merely created or collaborates on, stay out, so a declined item is never exposed.
+// Neither is an item whose type lets only its participants read it.
 func ReportsSQL(tenant, reports string) string {
-	return fmt.Sprintf(`(i.tenant_id = %[1]s AND i.deleted_at IS NULL AND EXISTS (
+	return fmt.Sprintf(`(i.tenant_id = %[1]s AND i.deleted_at IS NULL AND i.visibility <> 'participants' AND EXISTS (
 		SELECT 1 FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id AND o.user_id = ANY(%[2]s)
 	))`, tenant, reports)
 }

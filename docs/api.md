@@ -29,13 +29,15 @@ Users see these as "tasks".
 
 | Method and path | Does |
 | --- | --- |
-| `POST /v1/work-items` | Create an item owned by the caller. With `send`, also send it. With `list_id`, put it on a list the caller is on, and with `unowned: true` leave it there for any member to claim |
-| `GET /v1/work-items` | Items the caller can see. Filters: `view` (`owned`, `sent`, `collaborating`, `list` with `list`, `reports`, `claimable`), `status` (`todo`, `doing`, `done`, `cancelled`, or `open` for the first two), `q` (title contains), `due_from`, `due_before` |
-| `GET /v1/work-items/{id}` | One item, plus `can` (what the caller may do), `pending_offers`, `working` (agents expected to act on it now), `mention` (the latest comment that named the caller) and, on a list with a workflow, `workflow` |
-| `PATCH /v1/work-items/{id}` | Change `title`, `description`, `priority`, `status` or `due_at` (null clears it). Needs `version` |
+| `POST /v1/work-items` | Create an item owned by the caller. With `send`, also send it. With `list_id`, put it on a list the caller is on, and with `unowned: true` leave it there for any member to claim. `type`, `fields` and `subject_ref` make it a module's [typed item](types.md) |
+| `GET /v1/work-items` | Items the caller can see. Filters: `view` (`owned`, `sent`, `collaborating`, `list` with `list`, `reports`, `claimable`), `status` (`todo`, `doing`, `done`, `cancelled`, or `open` for the first two), `q` (title contains), `due_from`, `due_before`, `type`, `module`, `subject` |
+| `GET /v1/work-items/{id}` | One item, plus `can` (what the caller may do), `moves` (a typed item's transitions the caller may take now), `pending_offers`, `working` (agents expected to act on it now), `mention` (the latest comment that named the caller) and, on a list with a workflow, `workflow` |
+| `PATCH /v1/work-items/{id}` | Change `title`, `description`, `priority`, `status`, `due_at` (null clears it) or `fields` (merged; null clears a key). Needs `version` |
+| `GET /v1/types` | The [item types](types.md) in the caller's tenant, `collab.task` first, so a client can draw any item's fields |
 | `DELETE /v1/work-items/{id}` | Soft delete, for any owner, or the creator of an unowned list item |
 | `GET /v1/work-items/{id}/events` | Its history, oldest first |
 | `POST /v1/work-items/{id}/claim` | Claim an unowned list item |
+| `POST /v1/work-items/{id}/transition` | Take a typed item's transition: `{transition, note?, payload?, version?}`. The item read's `moves` lists those the caller may take |
 | `PUT /v1/work-items/{id}/list` | Put an item the caller owns on a list, or take it off with `list_id: ""` |
 | `DELETE /v1/work-items/{id}/owners/me` | Stop being an owner. The last owner can't (`409 last_owner`) |
 | `PUT`, `DELETE /v1/work-items/{id}/collaborators/{user}` | Add or remove a collaborator |
@@ -138,6 +140,9 @@ These need a tenant admin, or a member holding `work:admin` from `auth-server`.
 | --- | --- |
 | `GET /v1/module` | The manifest: `id: collab`, `api_version: 1`, `action_prefix: work`, `features`, and `trigger_events`, the event kinds automations can fire on |
 | `GET /internal/v1/attention?tenant=&user=&since=` | Counts for `t10-notify`'s digest, such as offers to answer and items overdue, with no titles or names. Only `t10-notify`'s service token may call it |
+| `PUT /internal/v1/types/{type}` | A module declares an [item type](types.md). Only the owning module's service token, `t10-<module>`, may call it |
+| `PUT`, `DELETE /internal/v1/types/{type}/tenants/{tenant}` | The owning module tailors a type for one tenant, or puts it back on the default. See [tenant versions](types.md#tenant-versions) |
+| `GET /internal/v1/events?module=&after=&limit=` | The events about a module's [typed items](types.md#telling-the-owning-module), from every tenant, for that module's service token only |
 
 ## Agent tools (MCP)
 
@@ -155,20 +160,21 @@ A result's text is JSON inside one `<module_record>` tag, which marks it as data
 
 | Tool | Action | Arguments | Does |
 | --- | --- | --- | --- |
-| `work_list` | `work:read` | `view?`, `status?`, `list_id?`, `due?` (`overdue`, `soon`), paging | List the principal's items |
-| `work_get` | `work:read` | `id` | One item in full, with its workflow stage |
+| `work_list` | `work:read` | `view?`, `status?`, `list_id?`, `due?` (`overdue`, `soon`), `type?`, `module?`, `subject?`, paging | List the principal's items |
+| `work_get` | `work:read` | `id` | One item in full, with its workflow stage and a typed item's `moves` |
 | `work_comments` | `work:read` | `id`, paging | Comments, oldest first |
 | `work_history` | `work:read` | `id`, paging | History, oldest first |
 | `work_offers` | `work:read` | `box` (`inbox`, `sent`), paging | Offers waiting, or sent |
 | `work_lists` | `work:read` | `archived?`, paging | Shared lists |
 | `work_people` | `work:read` | `q?` or `ids?`, paging | Find colleagues, or name user IDs |
-| `work_create` | `work:write` | `title`, `description?`, `priority?`, `due_at?`, `list_id?`, `unowned?`, `suggest_to?`, `suggest_note?` | Create an item that stays with the principal, optionally suggesting a send |
+| `work_create` | `work:write` | `title`, `description?`, `priority?`, `due_at?`, `list_id?`, `unowned?`, `suggest_to?`, `suggest_note?`, `type?`, `fields?`, `subject_ref?` | Create an item that stays with the principal, optionally suggesting a send |
 | `work_suggest` | `work:write` | `id`, `to`, `note?` | Suggest a send, for the person to make |
 | `work_update` | `work:write` | `id`, `version`, and fields to change | Edit fields or status |
 | `work_comment` | `work:write` | `id`, `body`, `mentions?` | Comment, telling people on the item |
 | `work_link` | `work:write` | `id`, `url`, `title?`, `kind?` | Add a link |
 | `work_send` | `work:send`, teammates only | `id`, `to`, `note`, `mode?` | Send an item |
 | `work_advance` | `work:send`, teammates only | `id`, `result`, `note`, `to?` | Finish its workflow stage |
+| `work_transition` | `work:write`, teammates only | `id`, `transition`, `note?`, `payload?`, `version?` | Take a typed item's transition |
 | `work_accept` | `work:send`, teammates only | `offer_id` | Accept an offer |
 | `work_decline` | `work:send`, teammates only | `offer_id`, `note` | Decline an offer |
 | `work_claim` | `work:write`, teammates only | `id` | Claim an unowned list item |
@@ -216,6 +222,11 @@ The payload holds IDs only. A run reads the item through its own tools.
 | `offer_exists`, `offer_not_pending`, `client_ref_reused` | 409 | An offer is already pending, it's already answered, or the `client_ref` was used for something else |
 | `not_on_workflow`, `no_way_back`, `cant_skip` | 409 | Workflow moves that don't apply |
 | `too_many_links` | 409 | The item has 20 links |
+| `not_for_type` | 409 | The item's type doesn't allow it, such as a list or collaborator on a `participants` item |
+| `unknown_type` | 422 | No such item type in this tenant |
+| `transition_not_allowed`, `typed_item_not_on_workflow` | 409 | The item's type has no such move from its state for the caller, or its states keep it off workflows |
+| `requirements_unmet` | 422 | A field, payload or note the move needs is empty |
+| `invalid_type`, `type_version_stale`, `type_fixed`, `type_default_missing` | 400, 409 | On the type routes: a bad definition or tailoring, a version that isn't newer, a changed `visibility` or `departure`, or a tenant version with no default at its version |
 | `agent_loop` | 409 | Agents have passed it on too often, and the sending agent has no manager to send it to instead |
 | `rate_limited` | 429 | Too many sends this hour |
 | `org_unavailable` | 503 | `auth-server` couldn't answer an org question |

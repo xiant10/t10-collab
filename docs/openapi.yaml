@@ -87,6 +87,122 @@ paths:
                   declined: {type: integer}
                   waiting_offers: {type: integer}
         default: {$ref: "#/components/responses/Error"}
+  /internal/v1/types/{type}:
+    put:
+      summary: Declare an item type's default, from the module that owns it
+      description: >-
+        Only the owning module's service token, t10-<module> for a type <module>.<name>, can call this. The
+        same version and definition again is a no-op, so every replica can push at start. A lower version, or
+        the same one with a different definition, answers type_version_stale. visibility and departure can
+        never change for a type ID. Unknown keys are refused. See docs/types.md.
+      operationId: putType
+      parameters:
+        - {name: type, in: path, required: true, schema: {type: string}, description: "<module>.<name>; must match the body's id"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TypeDefinition"}
+      responses:
+        "200":
+          description: The type as stored
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Type"}
+        default: {$ref: "#/components/responses/Error"}
+  /internal/v1/types/{type}/tenants/{tenant}:
+    parameters:
+      - {name: type, in: path, required: true, schema: {type: string}}
+      - {name: tenant, in: path, required: true, schema: {type: string}}
+    put:
+      summary: Tailor a type for one tenant, from the module that owns it
+      description: >-
+        Only the owning module's service token. The body is the whole type, at the version of the current
+        default, which must be pushed first (type_default_missing). It may change labels, field titles and what
+        moves require, and add fields; anything else answers invalid_type. Once a newer default is pushed, the
+        tenant falls back to it until the module tailors that version.
+      operationId: putTenantType
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TypeDefinition"}
+      responses:
+        "200":
+          description: The tenant's version as stored
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Type"}
+        default: {$ref: "#/components/responses/Error"}
+    delete:
+      summary: Put the tenant back on the type's default
+      operationId: deleteTenantType
+      responses:
+        "204": {description: Back on the default, or it already was}
+        default: {$ref: "#/components/responses/Error"}
+  /internal/v1/events:
+    get:
+      summary: The events about one module's typed items, for that module
+      description: >-
+        Only the module's own service token, t10-<module>, can call this. Events from every tenant, oldest
+        first, paged by an <xid>.<seq> cursor that stops short of any transaction still running, so a slow
+        commit arrives late rather than never. Keep the last cursor and pass it as after. See docs/types.md.
+      operationId: moduleEvents
+      parameters:
+        - {name: module, in: query, required: true, schema: {type: string}}
+        - {name: after, in: query, schema: {type: string}, description: "The last cursor read; empty from the start"}
+        - {$ref: "#/components/parameters/limit"}
+      responses:
+        "200":
+          description: One page, and the cursor to pass next, which stays put when there's nothing new
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        cursor: {type: string}
+                        id: {type: string}
+                        tenant: {type: string}
+                        kind: {type: string}
+                        item_id: {type: string}
+                        type: {type: string}
+                        actor: {type: string}
+                        actor_grant: {type: string}
+                        detail: {type: object, description: "As in the item's history: a move's from_state, to_state, note and payload"}
+                        at: {type: string, format: date-time}
+                        item:
+                          type: object
+                          description: The item as it is when the feed is read; left out once it's deleted
+                          properties:
+                            title: {type: string}
+                            status: {$ref: "#/components/schemas/Status"}
+                            state: {type: string}
+                            fields: {type: object}
+                            subject_ref: {type: string}
+                            creator_id: {type: string}
+                            owners: {type: array, items: {type: string}}
+                            version: {type: integer}
+                  next: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/types:
+    get:
+      summary: The item types in the caller's tenant, collab.task first
+      operationId: listTypes
+      responses:
+        "200":
+          description: Every type, so a client can draw any item's fields
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  types: {type: array, items: {$ref: "#/components/schemas/Type"}}
+        default: {$ref: "#/components/responses/Error"}
   /v1/work-items:
     post:
       summary: Create an item, optionally sending it at once
@@ -109,6 +225,9 @@ paths:
         - {name: q, in: query, schema: {type: string, maxLength: 300}, description: Part of the title, ignoring case}
         - {name: due_from, in: query, schema: {type: string, format: date-time}, description: Due at or after this. Leaves out items with no due date}
         - {name: due_before, in: query, schema: {type: string, format: date-time}, description: Due before this. Leaves out items with no due date}
+        - {name: type, in: query, schema: {type: string}, description: Only items of this type, such as collab.task}
+        - {name: module, in: query, schema: {type: string}, description: Only items of this module's types}
+        - {name: subject, in: query, schema: {type: string}, description: "Only items about this record, <module>:<type>:<id>"}
         - {$ref: "#/components/parameters/limit"}
         - {$ref: "#/components/parameters/cursor"}
       responses:
@@ -138,6 +257,10 @@ paths:
                   - {$ref: "#/components/schemas/Item"}
                   - type: object
                     properties:
+                      moves:
+                        type: array
+                        description: The transitions of a typed item's type the caller may take now
+                        items: {$ref: "#/components/schemas/Move"}
                       can:
                         type: object
                         properties:
@@ -183,8 +306,9 @@ paths:
                 title: {type: string, maxLength: 300}
                 description: {type: string, maxLength: 20000}
                 priority: {$ref: "#/components/schemas/Priority"}
-                status: {$ref: "#/components/schemas/Status"}
+                status: {allOf: [{$ref: "#/components/schemas/Status"}], description: "Refused with transition_not_allowed on an item whose type has states"}
                 due_at: {type: [string, "null"], format: date-time}
+                fields: {type: object, description: "Merged into the type's values; null clears a key. Only fields the type declares now can be written"}
       responses:
         "200": {$ref: "#/components/responses/Item"}
         default: {$ref: "#/components/responses/Error"}
@@ -213,6 +337,43 @@ paths:
                 properties:
                   events: {type: array, items: {$ref: "#/components/schemas/Event"}}
                   next_cursor: {type: string}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/work-items/{id}/transition:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Take one of a typed item's transitions
+      description: >-
+        The move must be in the item's moves: declared from its state, for one of the caller's relations to it.
+        A state the type moves to in a closed phase ends the item's offers, as a status change does.
+      operationId: transitionWorkItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transition]
+              properties:
+                transition: {type: string}
+                note: {type: string, maxLength: 2000}
+                payload:
+                  type: object
+                  description: The move's result, as its payload allows
+                  properties:
+                    reply: {type: string, maxLength: 10000}
+                    links:
+                      type: array
+                      maxItems: 20
+                      items:
+                        type: object
+                        required: [url]
+                        properties:
+                          url: {type: string, description: https only}
+                          title: {type: string, maxLength: 200}
+                version: {type: integer, description: When given, must be the version the caller read}
+      responses:
+        "200": {$ref: "#/components/responses/Item"}
         default: {$ref: "#/components/responses/Error"}
   /v1/work-items/{id}/claim:
     parameters:
@@ -890,6 +1051,94 @@ components:
         send: {$ref: "#/components/schemas/Send"}
         list_id: {type: string, description: Puts the item on a list the caller is on}
         unowned: {type: boolean, description: Starts a list item with no owner}
+        type: {type: string, description: "A module's item type, <module>.<name>; collab.task when left out"}
+        fields: {type: object, description: "The type's values, checked against it"}
+        subject_ref: {type: string, maxLength: 300, description: "The record it's about, <module>:<type>:<id>, of a kind the type takes"}
+    TypeField:
+      type: object
+      required: [type]
+      properties:
+        type: {type: string, enum: [string, integer, number, boolean]}
+        title: {type: string, maxLength: 100}
+        maxLength: {type: integer, maximum: 20000, description: For strings; 2000 when left out}
+        enum: {type: array, maxItems: 100, items: {}}
+    TypeDefinition:
+      type: object
+      required: [id, owner_module, version, label]
+      properties:
+        id: {type: string, description: "<module>.<name>"}
+        owner_module: {type: string}
+        version: {type: integer, minimum: 1}
+        label: {type: string, maxLength: 100}
+        fields:
+          type: object
+          properties:
+            type: {type: string, enum: [object]}
+            properties: {type: object, additionalProperties: {$ref: "#/components/schemas/TypeField"}}
+            order: {type: array, items: {type: string}, description: The order clients show fields in; the declared order when left out}
+        subject: {type: array, maxItems: 20, items: {type: string}, description: "Kinds of record an item can be about, <module>:<type>"}
+        visibility: {type: string, enum: [team, participants], default: team}
+        departure: {type: string, enum: [reassign, creator, cancel], description: "reassign by default; creator for participants, which can't reassign"}
+        states:
+          type: object
+          description: A lifecycle of its own. Each state counts as one of collab's statuses, its phase
+          additionalProperties:
+            type: object
+            required: [phase, label]
+            properties:
+              phase: {$ref: "#/components/schemas/Status"}
+              label: {type: string, maxLength: 100}
+        state_order: {type: array, items: {type: string}, description: The order clients show states in; the declared order when left out}
+        initial: {type: string, description: A todo or doing state new items start in}
+        cancelled: {type: string, description: The cancelled state collab moves an item to itself, as when its owners leave; needed unless departure is reassign}
+        offers:
+          type: object
+          description: What transfer offer events do to the state. A share send never moves it
+          properties:
+            send: {$ref: "#/components/schemas/OfferMove"}
+            assign: {$ref: "#/components/schemas/OfferMove"}
+            accept: {$ref: "#/components/schemas/OfferMove"}
+            decline: {$ref: "#/components/schemas/OfferMove"}
+            withdraw: {$ref: "#/components/schemas/OfferMove"}
+        transitions: {type: array, maxItems: 50, items: {$ref: "#/components/schemas/Transition"}}
+    OfferMove:
+      type: object
+      required: [to]
+      properties:
+        from: {type: array, items: {type: string}, description: "For accept, decline and withdraw, the state send moves to when left out"}
+        to: {type: string}
+        requires: {type: array, items: {type: string}, description: Fields that must be filled; send and assign only}
+        note: {type: string, enum: [required], description: decline only}
+    Transition:
+      type: object
+      required: [id, from, to, by]
+      properties:
+        id: {type: string}
+        label: {type: string, maxLength: 100}
+        from: {type: array, items: {type: string}}
+        to: {type: string}
+        by:
+          oneOf:
+            - {type: string, enum: [creator, owner, collaborator, recipient, list_member]}
+            - {type: array, items: {type: string, enum: [creator, owner, collaborator, recipient, list_member]}}
+        requires: {type: array, items: {type: string}, description: Fields that must be filled, or payload keys that must be given}
+        payload: {type: array, items: {type: string, enum: [reply, links]}}
+        note: {type: string, enum: [required]}
+    Move:
+      type: object
+      properties:
+        id: {type: string}
+        label: {type: string}
+        to: {type: string}
+        requires: {type: array, items: {type: string}}
+        payload: {type: array, items: {type: string}}
+        note: {type: string, enum: [required]}
+    Type:
+      allOf:
+        - {$ref: "#/components/schemas/TypeDefinition"}
+        - type: object
+          properties:
+            updated_at: {type: string, format: date-time}
     List:
       type: object
       properties:
@@ -1009,6 +1258,12 @@ components:
         links: {type: array, items: {$ref: "#/components/schemas/Link"}}
         stage: {type: string, description: Its stage on its list's workflow; left out off it}
         rounds: {type: integer, description: Times it went back since it was started or put at a stage}
+        type: {type: string, description: collab.task unless a module's}
+        type_version: {type: integer, description: The type version it was last written under}
+        state: {type: string, description: "Where it is in its type's lifecycle, when the type has states; status is then the state's phase"}
+        fields: {type: object, description: "The type's values, including any an earlier version declared, which are read-only"}
+        subject_ref: {type: string, description: "The record it's about; holding it grants nothing"}
+        visibility: {type: string, enum: [team, participants], description: "participants: only its creator, owners and the recipient of a pending offer read it"}
         workflow:
           type: object
           description: On a single read of an item on a list with a workflow
@@ -1080,6 +1335,15 @@ components:
         - too_many_links
         - managed_by_unit
         - not_accepting
+        - not_for_type
+        - unknown_type
+        - invalid_type
+        - type_version_stale
+        - type_fixed
+        - transition_not_allowed
+        - requirements_unmet
+        - typed_item_not_on_workflow
+        - type_default_missing
         - not_found
         - not_on_list
         - holder_not_accepting

@@ -42,6 +42,10 @@ func TestOpenAPIMatchesTheRoutes(t *testing.T) {
 		routes[rt.method+" "+rt.pattern] = true
 	}
 	routes["GET "+attentionRoute] = true
+	routes["PUT "+typeRoute] = true
+	routes["GET "+feedRoute] = true
+	routes["PUT "+tenantTypeRoute] = true
+	routes["DELETE "+tenantTypeRoute] = true
 	routes["POST "+mcpRoute] = true
 	if a, b := slices.Sorted(maps.Keys(routes)), slices.Sorted(maps.Keys(documented)); !slices.Equal(a, b) {
 		t.Errorf("routes %v\nspec   %v", a, b)

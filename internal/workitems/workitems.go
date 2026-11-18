@@ -22,6 +22,7 @@ import (
 
 	"t10-collab/internal/activity"
 	"t10-collab/internal/policy"
+	"t10-collab/internal/types"
 )
 
 // Statuses of an item.
@@ -71,6 +72,9 @@ var (
 	ErrClosed = errors.New("item is closed")
 	// ErrListArchived means an archived list takes no new items.
 	ErrListArchived = errors.New("list is archived")
+	// ErrNotForType means the item's type doesn't allow this, such as a list or
+	// a collaborator on an item only its participants may read.
+	ErrNotForType = errors.New("not allowed for this item's type")
 )
 
 // Org is the org reads this package needs.
@@ -103,7 +107,25 @@ type Item struct {
 	// counts the times it went back. See docs/workflows.md.
 	Stage  string `json:"stage,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
+	// Type is the item's type, collab.task unless a module's, and TypeVersion
+	// the version it was last written under. Fields are the type's values.
+	// See docs/types.md.
+	Type        string         `json:"type"`
+	TypeVersion int            `json:"type_version"`
+	Fields      map[string]any `json:"fields"`
+	// State is the type's word for where the item is, when its type has
+	// states. Status is then the state's phase.
+	State string `json:"state,omitempty"`
+	// SubjectRef is the record the item is about, as <module>:<type>:<id>.
+	SubjectRef string `json:"subject_ref,omitempty"`
+	// Visibility is the type's profile: team or participants.
+	Visibility string `json:"visibility"`
+	// Departure is what the sweep does once all its owners have left.
+	Departure string `json:"-"`
 }
+
+// Participants reports whether only the item's participants may read it.
+func (i Item) Participants() bool { return i.Visibility == types.VisibilityParticipants }
 
 // Suggestion is who an assistant thinks an item should go to, and the note.
 type Suggestion struct {
@@ -128,7 +150,8 @@ func closed(status string) bool { return status == StatusDone || status == Statu
 const itemColumns = `i.id, i.title, i.description, i.status, i.priority, i.due_at, i.creator_id, COALESCE(i.list_id, ''), i.version,
 	ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id),
 	ARRAY(SELECT c.user_id FROM collab.work_item_collaborators c WHERE c.tenant_id = i.tenant_id AND c.item_id = i.id ORDER BY c.user_id),
-	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at, COALESCE(i.stage, ''), i.rounds, ` + linksColumn
+	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at, COALESCE(i.stage, ''), i.rounds,
+	i.type, i.type_version, i.fields, COALESCE(i.state, ''), COALESCE(i.subject_ref, ''), i.visibility, i.departure, ` + linksColumn
 
 func scanItem(row pgx.Row) (Item, error) {
 	var i Item
@@ -137,7 +160,8 @@ func scanItem(row pgx.Row) (Item, error) {
 	var at *time.Time
 	var links []byte
 	err := row.Scan(&i.ID, &i.Title, &i.Description, &i.Status, &i.Priority, &i.DueAt, &i.CreatorID, &i.ListID, &i.Version,
-		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at, &i.Stage, &i.Rounds, &links)
+		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at, &i.Stage, &i.Rounds,
+		&i.Type, &i.TypeVersion, &i.Fields, &i.State, &i.SubjectRef, &i.Visibility, &i.Departure, &links)
 	if to != nil && at != nil {
 		i.Suggestion = &Suggestion{To: *to, Note: note, At: *at}
 	}
@@ -170,6 +194,12 @@ type NewItem struct {
 	ListID string `json:"list_id"`
 	// Unowned starts a list item with no owner, for any member to claim.
 	Unowned bool `json:"unowned"`
+	// Type is a module's item type. Empty is collab.task.
+	Type string `json:"type"`
+	// Fields are the type's values, checked against it.
+	Fields map[string]any `json:"fields"`
+	// SubjectRef is the record the item is about, of a kind the type takes.
+	SubjectRef string `json:"subject_ref"`
 }
 
 func validPriority(p string) bool { return p == "low" || p == "normal" || p == "high" }
@@ -189,15 +219,38 @@ func (s *Service) Create(ctx context.Context, c policy.Caller, n NewItem, after 
 		(n.Unowned && n.ListID == "") {
 		return Item{}, ErrInvalid
 	}
-	var ref, listID *string
+	var ref, listID, subject *string
 	if n.ListID != "" {
 		listID = &n.ListID
 	}
 	if n.ClientRef != "" {
 		ref = &n.ClientRef
 	}
+	if n.SubjectRef != "" {
+		subject = &n.SubjectRef
+	}
 	var item Item
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// The type is read in the transaction, so the item is checked against
+		// the version it's stored under.
+		t, err := types.Resolve(ctx, tx, c.TenantID, n.Type)
+		if err != nil {
+			return err
+		}
+		if t.Visibility == types.VisibilityParticipants && n.ListID != "" {
+			return ErrNotForType
+		}
+		if err := t.CheckSubject(n.SubjectRef); err != nil {
+			return err
+		}
+		fields, _, err := t.Apply(nil, n.Fields)
+		if err != nil {
+			return err
+		}
+		status, state := StatusTodo, (*string)(nil)
+		if t.HasStates() {
+			status, state = t.Phase(t.Initial), &t.Initial
+		}
 		if n.ListID != "" {
 			var open bool
 			err := tx.QueryRow(ctx,
@@ -216,10 +269,12 @@ func (s *Service) Create(ctx context.Context, c policy.Caller, n NewItem, after 
 		}
 		id := ids.New("wi")
 		tag, err := tx.Exec(ctx,
-			`INSERT INTO collab.work_items (tenant_id, id, title, description, priority, due_at, creator_id, client_ref, list_id)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			`INSERT INTO collab.work_items (tenant_id, id, title, description, priority, due_at, creator_id, client_ref, list_id,
+			                                type, type_version, fields, subject_ref, visibility, departure, status, state)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 			 ON CONFLICT (tenant_id, creator_id, client_ref) WHERE client_ref IS NOT NULL DO NOTHING`,
-			c.TenantID, id, n.Title, n.Description, n.Priority, n.DueAt, c.UserID, ref, listID)
+			c.TenantID, id, n.Title, n.Description, n.Priority, n.DueAt, c.UserID, ref, listID,
+			t.ID, t.Version, fields, subject, t.Visibility, t.Departure, status, state)
 		if err != nil {
 			return fmt.Errorf("insert item: %w", err)
 		}
@@ -356,7 +411,7 @@ func (s *Service) ViewAs(ctx context.Context, c policy.Caller, id string) (Item,
 	if err != nil {
 		return Item{}, policy.Relation{}, policy.ErrNotFound
 	}
-	if !slices.ContainsFunc(item.Owners, func(owner string) bool { return slices.Contains(reports, owner) }) {
+	if item.Participants() || !slices.ContainsFunc(item.Owners, func(owner string) bool { return slices.Contains(reports, owner) }) {
 		return Item{}, policy.Relation{}, policy.ErrNotFound
 	}
 	return item.ForReader(c.UserID), policy.Relation{}, nil
@@ -477,6 +532,10 @@ func (s *Service) Reassign(ctx context.Context, c policy.Caller, id, to string) 
 		if reason == nil || item.Closed() {
 			return policy.ErrNotFound
 		}
+		// An admin may not show an item only its participants read to anyone new.
+		if item.Participants() && to != item.CreatorID {
+			return ErrNotForType
+		}
 		if *reason == ReasonSuspended {
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO collab.work_item_collaborators (tenant_id, item_id, user_id, added_by)
@@ -545,6 +604,43 @@ func Unqueue(ctx context.Context, tx pgx.Tx, tenantID, id string) error {
 	return nil
 }
 
+// CancelDeparted cancels an item whose owners have all left, when its type says
+// so, and tells its creator. The caller holds the item's lock.
+func CancelDeparted(ctx context.Context, tx pgx.Tx, c policy.Caller, item Item, gone []string) error {
+	if item.State != "" {
+		t, err := types.Resolve(ctx, tx, c.TenantID, item.Type)
+		if err != nil {
+			return err
+		}
+		if err := Unqueue(ctx, tx, c.TenantID, item.ID); err != nil {
+			return err
+		}
+		_, err = SetState(ctx, tx, c, item, t, t.Cancelled,
+			map[string]any{"reason": "owners_departed", "departed": gone}, []string{item.CreatorID})
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE collab.work_items SET status = 'cancelled', stage = NULL, rounds = 0, version = version + 1, updated_at = now()
+		 WHERE tenant_id = $1 AND id = $2`, c.TenantID, item.ID); err != nil {
+		return fmt.Errorf("cancel item: %w", err)
+	}
+	if err := Unqueue(ctx, tx, c.TenantID, item.ID); err != nil {
+		return err
+	}
+	if err := WithdrawOffers(ctx, tx, c, item.ID, OfferScope{}, "item_closed"); err != nil {
+		return err
+	}
+	notify, err := activity.PeopleOn(ctx, tx, c.TenantID, item.ID)
+	if err != nil {
+		return err
+	}
+	return activity.Record(ctx, tx, c, activity.Change{
+		ItemID: item.ID, Kind: "item.updated",
+		Detail: map[string]any{"fields": []string{}, "status_from": item.Status, "status_to": StatusCancelled, "reason": "owners_departed", "departed": gone},
+		Notify: append(notify, item.CreatorID),
+	})
+}
+
 // RemoveDeparted takes people who have left off an item's owners, and tells
 // whoever remains. The caller holds the item's lock.
 func RemoveDeparted(ctx context.Context, tx pgx.Tx, c policy.Caller, id string, gone []string) error {
@@ -567,7 +663,10 @@ type Filter struct {
 	// DueFrom and DueBefore bound due_at, from inclusive and before exclusive.
 	// Either one leaves out items with no due date.
 	DueFrom, DueBefore *time.Time
-	Limit              int
+	// Type, Module and Subject narrow to one type, one module's types, or the
+	// items about one record.
+	Type, Module, Subject string
+	Limit                 int
 }
 
 // likeEscaper keeps a search's own % and _ from acting as wildcards.
@@ -631,6 +730,18 @@ func (s *Service) List(ctx context.Context, c policy.Caller, f Filter) ([]Item, 
 	if f.DueBefore != nil {
 		view += " AND i.due_at < " + arg(*f.DueBefore)
 	}
+	if f.Type != "" {
+		view += " AND i.type = " + arg(f.Type)
+	}
+	if f.Module != "" {
+		if strings.ContainsAny(f.Module, `.%_\`) || len(f.Module) > 32 {
+			return nil, "", ErrInvalid
+		}
+		view += " AND i.type LIKE " + arg(f.Module+".%")
+	}
+	if f.Subject != "" {
+		view += " AND i.subject_ref = " + arg(f.Subject)
+	}
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+itemColumns+" FROM collab.work_items i WHERE "+visible+" "+view+`
 		   AND ($3 = '' OR i.status = $3 OR ($3 = 'open' AND i.status IN ('todo', 'doing')))
@@ -676,6 +787,8 @@ type Patch struct {
 	Priority    *string      `json:"priority"`
 	Status      *string      `json:"status"`
 	DueAt       OptionalTime `json:"due_at"`
+	// Fields merges into the type's values: a key set to null is cleared.
+	Fields map[string]any `json:"fields"`
 }
 
 func (p Patch) apply(item *Item) ([]string, error) {
@@ -736,7 +849,28 @@ func (s *Service) Update(ctx context.Context, c policy.Caller, id string, p Patc
 		if err != nil {
 			return err
 		}
+		if len(p.Fields) > 0 {
+			// A write moves the item to its type's current version.
+			t, err := types.Resolve(ctx, tx, c.TenantID, item.Type)
+			if err != nil {
+				return err
+			}
+			var keys []string
+			if item.Fields, keys, err = t.Apply(item.Fields, p.Fields); err != nil {
+				return err
+			}
+			for _, key := range keys {
+				changed = append(changed, "fields."+key)
+			}
+			if len(keys) > 0 {
+				item.TypeVersion = t.Version
+			}
+		}
 		detail := map[string]any{"fields": changed}
+		if p.Status != nil && *p.Status != from && item.State != "" {
+			// A type with states moves only by its own moves.
+			return ErrMoveNotAllowed
+		}
 		if p.Status != nil && *p.Status != from {
 			to := *p.Status
 			if !slices.Contains([]string{StatusTodo, StatusDoing, StatusDone, StatusCancelled}, to) {
@@ -756,11 +890,12 @@ func (s *Service) Update(ctx context.Context, c policy.Caller, id string, p Patc
 		}
 		err = tx.QueryRow(ctx,
 			`UPDATE collab.work_items SET title = $3, description = $4, priority = $5, status = $6, due_at = $7,
+			        fields = $8, type_version = $9,
 			        stage = CASE WHEN $6 IN ('done', 'cancelled') THEN NULL ELSE stage END,
 			        rounds = CASE WHEN $6 IN ('done', 'cancelled') THEN 0 ELSE rounds END,
 			        version = version + 1, updated_at = now()
 			 WHERE tenant_id = $1 AND id = $2 RETURNING version, updated_at`,
-			c.TenantID, id, item.Title, item.Description, item.Priority, item.Status, item.DueAt).Scan(&item.Version, &item.UpdatedAt)
+			c.TenantID, id, item.Title, item.Description, item.Priority, item.Status, item.DueAt, item.Fields, item.TypeVersion).Scan(&item.Version, &item.UpdatedAt)
 		if err != nil {
 			return fmt.Errorf("update item: %w", err)
 		}
@@ -822,25 +957,31 @@ func WithdrawOffers(ctx context.Context, tx pgx.Tx, c policy.Caller, itemID stri
 		   AND ($3 = '' OR from_user_id = $3) AND ($4 = '' OR to_user_id = $4)
 		   AND (NOT $5 OR from_user_id NOT IN (
 		       SELECT user_id FROM collab.work_item_owners WHERE tenant_id = $1 AND item_id = $2))
-		 RETURNING id, from_user_id, to_user_id`, c.TenantID, itemID, scope.From, scope.To, scope.NonOwners)
+		 RETURNING id, from_user_id, to_user_id, mode`, c.TenantID, itemID, scope.From, scope.To, scope.NonOwners)
 	if err != nil {
 		return fmt.Errorf("withdraw offers: %w", err)
 	}
-	type ended struct{ id, from, to string }
+	type ended struct{ id, from, to, mode string }
 	offers, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (ended, error) {
 		var o ended
-		return o, row.Scan(&o.id, &o.from, &o.to)
+		return o, row.Scan(&o.id, &o.from, &o.to, &o.mode)
 	})
 	if err != nil {
 		return fmt.Errorf("withdraw offers: %w", err)
 	}
+	transfer := false
 	for _, o := range offers {
+		transfer = transfer || o.mode == transferMode
 		err := activity.Record(ctx, tx, c, activity.Change{
 			ItemID: itemID, Kind: "offer.withdrawn", Detail: map[string]any{"offer_id": o.id, "reason": reason}, Notify: []string{o.from, o.to},
 		})
 		if err != nil {
 			return err
 		}
+	}
+	// An item closing or deleted keeps the state that closed it.
+	if transfer && reason != "item_closed" && reason != "item_deleted" {
+		return OffersEnded(ctx, tx, c, itemID)
 	}
 	return nil
 }
@@ -938,6 +1079,9 @@ func (s *Service) SetList(ctx context.Context, c policy.Caller, id, listID strin
 		if locked.Closed() {
 			return ErrClosed
 		}
+		if locked.Participants() && listID != "" {
+			return ErrNotForType
+		}
 		if locked.ListID == listID {
 			item = locked
 			return nil
@@ -1015,6 +1159,9 @@ func (s *Service) AddCollaborator(ctx context.Context, c policy.Caller, id, user
 		}
 		if slices.Contains(item.Owners, userID) {
 			return ErrAlreadyOwner
+		}
+		if item.Participants() {
+			return ErrNotForType
 		}
 		tag, err := tx.Exec(ctx,
 			`INSERT INTO collab.work_item_collaborators (tenant_id, item_id, user_id, added_by) VALUES ($1, $2, $3, $4)
