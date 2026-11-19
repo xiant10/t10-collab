@@ -53,13 +53,19 @@ func TestTemplatesRender(t *testing.T) {
 		t.Errorf("apps: %s", out.String())
 	}
 	out.Reset()
-	menu := Menu{Name: "wei", Detail: "Acme", Lang: "zh-Hans", Theme: "dark", Here: "/x", LanguageAction: "/language", ThemeAction: "/theme", AccountURL: "http://auth/v1/account", SignOutAction: "/auth/logout"}
+	menu := Menu{Name: "wei", Detail: "Acme", Theme: "dark", AccountURL: "http://auth/v1/account", SignOutAction: "/auth/logout"}
 	if err := set.ExecuteTemplate(&out, "frame-account", menu); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`value="zh-Hans" lang="zh-Hans" aria-pressed="true"`, `value="dark" aria-pressed="true"`, `href="http://auth/v1/account"`, `action="/auth/logout"`, ">W<"} {
+	for _, want := range []string{`href="http://auth/v1/account"`, `action="/auth/logout"`, ">W<"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("menu lacks %s: %s", want, out.String())
+		}
+	}
+	// Language and theme are chosen on the account page alone.
+	for _, unwanted := range []string{`name="lang"`, `name="theme"`} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Errorf("menu has %s: %s", unwanted, out.String())
 		}
 	}
 }

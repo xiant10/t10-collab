@@ -8,20 +8,6 @@
 {{define "frame-account"}}<details class="frame-account">
 <summary><span class="frame-avatar" aria-hidden="true">{{.Initial}}</span><span class="frame-who"><b>{{.Name}}</b>{{with .Detail}}<small>{{.}}</small>{{end}}</span>{{template "frame-icon" "updown"}}</summary>
 <div class="frame-menu" role="group" aria-label="{{t "Account"}}">
-<span class="frame-label">{{t "Language"}}</span>
-<form class="frame-seg" method="post" action="{{.LanguageAction}}">
-<input type="hidden" name="next" value="{{.Here}}">
-<button name="lang" value="en" lang="en" aria-pressed="{{eq .Lang "en"}}">English</button>
-<button name="lang" value="zh-Hans" lang="zh-Hans" aria-pressed="{{eq .Lang "zh-Hans"}}">简体中文</button>
-</form>
-<span class="frame-label">{{t "Theme"}}</span>
-<form class="frame-seg" method="post" action="{{.ThemeAction}}">
-<input type="hidden" name="next" value="{{.Here}}">
-<button name="theme" value="system" aria-pressed="{{or (eq .Theme "system") (eq .Theme "")}}">{{t "System"}}</button>
-<button name="theme" value="light" aria-pressed="{{eq .Theme "light"}}">{{t "Light"}}</button>
-<button name="theme" value="dark" aria-pressed="{{eq .Theme "dark"}}">{{t "Dark"}}</button>
-</form>
-<hr>
 {{with .AccountURL}}<a class="frame-item" href="{{.}}">{{template "frame-icon" "user"}}{{t "Account"}}</a>
 {{end}}<form method="post" action="{{.SignOutAction}}"><button class="frame-item">{{template "frame-icon" "signout"}}{{t "Sign out"}}</button></form>
 </div>
