@@ -115,16 +115,13 @@ func Places(h Homes, tenant, current string, zh bool) []Place {
 }
 
 // Menu is what the account menu shows and where its forms go. Every action is a
-// path on the page's own site.
+// path on the page's own site. Language and theme are chosen on the account page
+// alone, so the menu offers neither.
 type Menu struct {
 	// Name is who's signed in, and Detail where: a tenant, or the platform.
 	Name, Detail string
-	// Lang is "en" or "zh-Hans", and Theme "system", "light" or "dark".
-	Lang, Theme string
-	// Here is where a change of language or theme comes back to.
-	Here string
-	// LanguageAction and ThemeAction take a POST with lang or theme, and next.
-	LanguageAction, ThemeAction string
+	// Theme is "system", "light" or "dark", the page's data-theme.
+	Theme string
 	// AccountURL is the account page; empty on the account page itself.
 	AccountURL string
 	// SignOutAction ends every t10 app in this browser.

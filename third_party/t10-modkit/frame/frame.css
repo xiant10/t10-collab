@@ -30,7 +30,6 @@
 .frame-who b { font-weight: 600; font-size: 0.9rem; }
 .frame-who small { color: var(--muted); font-size: 0.78rem; }
 .frame-menu { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 236px; z-index: 20; display: flex; flex-direction: column; gap: 0.3rem; padding: 0.55rem; background: var(--surface, var(--panel)); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
-.frame-label { color: var(--muted); font-size: 0.75rem; padding: 0.1rem 0.25rem 0; }
 .frame-seg { display: flex; gap: 2px; padding: 2px; margin: 0; background: var(--sunken); border-radius: 9px; }
 .frame-seg button { flex: 1; width: auto; min-height: 0; margin: 0; padding: 0.3rem 0.4rem; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: 0.82rem; font-weight: 550; cursor: pointer; box-shadow: none; filter: none; }
 .frame-seg button:hover { color: var(--text); background: none; filter: none; }
