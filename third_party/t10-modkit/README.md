@@ -1,7 +1,9 @@
 # t10-modkit
 
-Shared Go plumbing extracted from t10-collab for the knowledge module: live org
-reads (`people`), random IDs (`ids`), and keyset cursors (`page`). Business policy
+Shared Go plumbing for t10's services: live org reads (`people`), random IDs
+(`ids`), keyset cursors (`page`), Postgres migrations (`pgdb`), request traces
+(`telemetry`), JSON bodies and the error body (`httpjson`), web sign-in
+(`websession`), the app frame (`frame`) and docs over MCP (`docsmcp`). Business policy
 stays in each consumer. `people.Member` always reads fresh; its separate reports
 cache is not suitable for knowledge membership authorization.
 
@@ -13,6 +15,6 @@ so builds never need a sibling checkout. Refresh snapshots with
 this repository has a remote and release. No remote has been created.
 
 Extraction is incremental. Verifier parity remains governed by auth-server;
-telemetry, route guard composition and scheduler locks remain to be extracted.
+route guard composition and scheduler locks remain to be extracted.
 
 Source packages were extracted from t10-collab and retain its Apache 2.0 license; see [LICENSE](LICENSE).

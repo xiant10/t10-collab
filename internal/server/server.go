@@ -5,7 +5,6 @@ package server
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xiant10/t10-modkit/docsmcp"
+	"github.com/xiant10/t10-modkit/httpjson"
 	"github.com/xiant10/t10-modkit/page"
 	"github.com/xiant10/t10-modkit/people"
 
@@ -430,24 +430,14 @@ func (r *recorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		slog.Error("encode response", "error", err)
-	}
-}
+func writeJSON(w http.ResponseWriter, status int, body any) { httpjson.Write(w, status, body) }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, map[string]string{"error": code, "message": message})
+	httpjson.Error(w, status, code, message)
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, into any) bool {
-	if err := json.NewDecoder(r.Body).Decode(into); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "the body isn't valid JSON for this route")
-		return false
-	}
-	return true
+	return httpjson.Decode(w, r, into)
 }
 
 // failure maps a domain error to a response. Anything unknown is logged and
