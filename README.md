@@ -109,6 +109,10 @@ This service meets the module contract in `../contracts/module/README.md`. `perm
 
 A forbidden item answers `404`, the same as a missing one. A caller who can see an item, but can't do what they asked, gets `403`.
 
+## Contact
+
+Questions, feedback or commercial enquiries: [hi@tacten.ai](mailto:hi@tacten.ai).
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
