@@ -5,7 +5,11 @@ For coding agents working in this repo. Work between people and agent teammates:
 ## Build and test
 
 ```bash
-go build ./... && go vet ./... && go test ./...
+make lint      # go vet, gofmt
+make test      # needs nothing running; database tests skip
+make db-up     # the throwaway Postgres on 55432 that every t10 repo's tests share
+make test-db   # every test, against it, one package at a time
+make ci        # what CI runs
 ```
 
 ## Read first

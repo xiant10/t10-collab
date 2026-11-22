@@ -7,7 +7,7 @@ Shared Go plumbing for t10's services: live org reads (`people`), random IDs
 stays in each consumer. `people.Member` always reads fresh; its separate reports
 cache is not suitable for knowledge membership authorization.
 
-Run `go test ./...`. This repository is not published yet. Consumers carry a
+Run `make test`, or `make db-up` and `make test-db` for `pgdb`'s tests against Postgres. This repository is not published yet. Consumers carry a
 source snapshot in `third_party/t10-modkit` and a local replacement in go.mod,
 so builds never need a sibling checkout. Refresh snapshots with
 `./scripts/sync-modkit.sh` in the workspace and check parity with

@@ -110,11 +110,11 @@ Roll back with `kubectl rollout undo`. On its own, `docker compose up -d --build
 ## Tests
 
 ```sh
-docker run -d --rm --name collab-test-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=collab_test -p 55436:5432 postgres:17-alpine
-TEST_DATABASE_URL='postgres://postgres:test@localhost:55436/collab_test?sslmode=disable' go test -p 1 ./...
+make db-up     # a throwaway Postgres on 55432, shared by every t10 repo's tests
+make test-db   # every test against it, one package at a time
 ```
 
-- Without `TEST_DATABASE_URL`, the database tests skip. Each test drops and remigrates the `collab` schema, so use a throwaway Postgres and `-p 1`.
+- `make test` runs without a database, and the database tests skip. Each test drops and remigrates the `collab` schema, so `TEST_DATABASE_URL` must name a throwaway Postgres, and `make test-db` runs packages one at a time.
 - `newHarness` builds the server over a fake org: tenant `acme` with `ada`, `bob`, `carol` (who manages `bob` and `ada`), `dan` and `eve`, plus `gus` in `globex`. `h.as(user, …)`, `h.want(…)` and `h.wantError(…)` call routes as a person; `h.item` and `h.send` set up common state.
 - Agent tokens are strings the test verifier reads: `agent-read` and `agent-write` for an assistant, and `teammate:<account>` or `teammate:<account>@<grant>` for a teammate's run, whose chain is `<grant>_run` then `<grant>`. `call(t, url, token, tool, args)` runs a tool.
 - `h.outbox()` and `h.clearOutbox()` check what would be posted to `t10-automations`.
