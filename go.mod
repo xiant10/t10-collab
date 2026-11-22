@@ -1,18 +1,6 @@
 module t10-collab
 
-go 1.26.1
-
-toolchain go1.27.3
-
-require (
-	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/jackc/pgx/v5 v5.12.0
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
-	go.opentelemetry.io/otel v1.47.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.47.0 // indirect
-	go.opentelemetry.io/otel/trace v1.47.0
-	gopkg.in/yaml.v3 v3.0.1
-)
+go 1.27.4
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -26,10 +14,13 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
+	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
@@ -41,6 +32,12 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
-require github.com/xiant10/t10-modkit v0.0.0
+require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/jackc/pgx/v5 v5.12.0
+	github.com/xiant10/t10-modkit v0.0.0
+	go.opentelemetry.io/otel/trace v1.47.0
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 replace github.com/xiant10/t10-modkit => ./third_party/t10-modkit
