@@ -1,7 +1,8 @@
 name: test
 
-# Builds and tests every push to main and every pull request. GitHub sets CI, so
-# a test that needs the database fails here instead of skipping.
+# Builds and tests every push to main and every pull request with make ci, the
+# same target a person runs. GitHub sets CI, so a test that needs the database
+# fails here instead of skipping.
 on:
   push:
     branches: ["main"]
@@ -30,6 +31,4 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go build ./...
-      - run: go vet ./...
-      - run: go test -p 1 ./...
+      - run: make ci

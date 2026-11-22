@@ -83,10 +83,11 @@ A conversation keeps the grant it opened with, so one from before this change ha
 ## Test
 
 ```sh
-TEST_DATABASE_URL='postgres://…' go test ./...
+make db-up     # a throwaway Postgres on 55432, shared by every t10 repo's tests
+make test-db   # every test against it, one package at a time
 ```
 
-Tests need a throwaway Postgres, because they drop the `collab` schema. Without the variable, the database tests skip.
+Tests need a throwaway Postgres, because they drop the `collab` schema. `make test` runs without one, and the database tests skip.
 
 ## Layout
 
