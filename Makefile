@@ -10,9 +10,11 @@ GO_FILES = $(shell git ls-files '*.go' | grep -v '^third_party/')
 build:
 	go build ./...
 
+# gofmt comes from the toolchain go.mod pins, which go switches to; the gofmt on
+# PATH may be another release, and they don't always agree.
 lint:
 	go vet ./...
-	@out=$$(gofmt -l $(GO_FILES)); [ -z "$$out" ] || { echo "gofmt -w these:"; echo "$$out"; exit 1; }
+	@out=$$("$$(go env GOROOT)/bin/gofmt" -l $(GO_FILES)); [ -z "$$out" ] || { echo "gofmt -w these:"; echo "$$out"; exit 1; }
 
 # Database tests skip.
 test:
