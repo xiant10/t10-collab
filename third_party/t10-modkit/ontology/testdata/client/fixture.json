@@ -1,0 +1,2017 @@
+{
+  "modules": [
+    {
+      "id": "sales"
+    },
+    {
+      "id": "collab"
+    },
+    {
+      "id": "future"
+    },
+    {
+      "id": "down",
+      "down": true
+    }
+  ],
+  "tokens": {
+    "delegated": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY3QiOnsic3ViIjoiYWdlbnQtdGkifSwiZ3JhbnQiOiJncnRfMSIsInN1YiI6InJlcDEiLCJ0aWQiOiJ0MSJ9.c2ln",
+    "person": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0MTAiLCJzaWQiOiJzMSIsInN1YiI6InJlcDEiLCJ0aWQiOiJ0MSJ9.c2ln",
+    "service": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0MTAiLCJzdWIiOiJzdmNfcmVwb3J0cyJ9.c2ln"
+  },
+  "exchanges": [
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/module",
+      "status": 200,
+      "response": {
+        "id": "sales",
+        "api_version": 1,
+        "action_prefix": "sales",
+        "enabled": true,
+        "features": [
+          "ontology"
+        ]
+      }
+    },
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/ontology",
+      "status": 200,
+      "response": {
+        "module": "sales",
+        "version": 1,
+        "object_types": {
+          "account": {
+            "label": "Account",
+            "label_zh": "客户单位",
+            "description": "An organisation a rep sells to. Private to its rep.",
+            "title": "name",
+            "implements": [],
+            "properties": {
+              "name": {
+                "type": "string",
+                "name": "Name",
+                "name_zh": "名称"
+              }
+            },
+            "links": {
+              "deals": {
+                "to": "sales:deal",
+                "many": true
+              }
+            }
+          },
+          "deal": {
+            "label": "Deal",
+            "label_zh": "商机项目",
+            "description": "One opportunity at an account, scored from its ledger.",
+            "title": "name",
+            "implements": [],
+            "properties": {
+              "account": {
+                "type": "ref",
+                "to": "sales:account"
+              },
+              "amount": {
+                "type": "money_fen"
+              },
+              "band": {
+                "type": "enum",
+                "values": [
+                  "A",
+                  "B",
+                  "C"
+                ],
+                "derived": true,
+                "sources": true
+              },
+              "name": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "text"
+              },
+              "score": {
+                "type": "integer",
+                "derived": true,
+                "sources": true
+              },
+              "stage": {
+                "type": "enum",
+                "derived": true,
+                "sources": true
+              }
+            },
+            "links": {
+              "items": {
+                "to": "sales:item",
+                "many": true
+              },
+              "records": {
+                "to": "sales:record",
+                "many": true
+              },
+              "stakeholders": {
+                "to": "sales:stakeholder",
+                "many": true,
+                "properties": {
+                  "role": {
+                    "type": "enum"
+                  }
+                }
+              },
+              "tickets": {
+                "to": "sales:ticket",
+                "many": true
+              }
+            }
+          },
+          "item": {
+            "label": "Meeting or to-do",
+            "label_zh": "日程待办",
+            "title": "title",
+            "implements": [
+              "t10:HasDeadline"
+            ],
+            "properties": {
+              "deadline": {
+                "type": "timestamp"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "links": {}
+          },
+          "record": {
+            "label": "Record",
+            "label_zh": "行动记录",
+            "description": "One fact in the ledger. Never edited; an undo writes a compensating record.",
+            "title": "summary",
+            "implements": [],
+            "properties": {
+              "at": {
+                "type": "timestamp"
+              },
+              "deal": {
+                "type": "ref",
+                "to": "sales:deal"
+              },
+              "kind": {
+                "type": "enum",
+                "values": [
+                  "stage",
+                  "undo"
+                ]
+              },
+              "summary": {
+                "type": "text"
+              },
+              "undoes": {
+                "type": "ref",
+                "to": "sales:record"
+              }
+            },
+            "links": {}
+          },
+          "stakeholder": {
+            "label": "Stakeholder",
+            "label_zh": "关键人",
+            "description": "A person at an account who matters to a deal.",
+            "title": "name",
+            "implements": [
+              "t10:Person"
+            ],
+            "properties": {
+              "account": {
+                "type": "ref",
+                "to": "sales:account"
+              },
+              "name": {
+                "type": "string",
+                "name": "Name",
+                "name_zh": "姓名"
+              },
+              "phone": {
+                "type": "string",
+                "sensitivity": "contact"
+              }
+            },
+            "links": {}
+          },
+          "ticket": {
+            "label": "Ticket",
+            "label_zh": "工单",
+            "title": "title",
+            "implements": [],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "work_item": {
+                "type": "ref",
+                "to": "collab:work_item"
+              }
+            },
+            "links": {}
+          }
+        },
+        "action_types": {
+          "deal.set_discount": {
+            "label": "Set the discount",
+            "label_zh": "设置折扣",
+            "on": "deal",
+            "params": {
+              "percent": {
+                "type": "decimal",
+                "required": true
+              }
+            },
+            "permission": "sales:deal.discount",
+            "idempotent": false,
+            "undo": false,
+            "agent": "never"
+          },
+          "deal.set_stage": {
+            "label": "Change stage",
+            "label_zh": "推进阶段",
+            "description": "Move the deal to another of the company's stages, citing the record that justifies it. Writes a stage record; the stage is recomputed from it.",
+            "on": "deal",
+            "params": {
+              "because": {
+                "type": "ref",
+                "to": "sales:record"
+              },
+              "to": {
+                "type": "enum",
+                "required": true
+              }
+            },
+            "permission": "sales:deal.update",
+            "idempotent": false,
+            "undo": false,
+            "agent": "propose"
+          },
+          "record.add": {
+            "label": "Add a record",
+            "label_zh": "记录",
+            "description": "Write one safe fact to the deal's ledger, such as a meeting held or something learned. kind is one of the company's kinds of record.",
+            "on": "deal",
+            "params": {
+              "kind": {
+                "type": "enum",
+                "required": true,
+                "label": true
+              },
+              "summary": {
+                "type": "text",
+                "required": true
+              }
+            },
+            "permission": "sales:record.add",
+            "idempotent": true,
+            "undo": true,
+            "undo_window": 86400,
+            "agent": "undoable"
+          },
+          "stakeholder.create": {
+            "label": "Add a person",
+            "label_zh": "新增关键人",
+            "params": {
+              "account": {
+                "type": "ref",
+                "to": "sales:account",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              }
+            },
+            "permission": "sales:stakeholder.create",
+            "idempotent": false,
+            "undo": false,
+            "agent": "propose"
+          },
+          "ticket.send": {
+            "label": "Send a ticket",
+            "label_zh": "发起工单",
+            "on": "deal",
+            "params": {
+              "title": {
+                "type": "string",
+                "required": true
+              }
+            },
+            "permission": "sales:ticket.send",
+            "idempotent": false,
+            "undo": false,
+            "agent": "propose"
+          }
+        },
+        "restricted": [
+          "deal.set_discount"
+        ],
+        "interfaces": [
+          "t10:HasDeadline",
+          "t10:Person"
+        ],
+        "events": {
+          "deal.stage_changed": {
+            "on": "deal"
+          }
+        },
+        "tenant": {
+          "revision": 3,
+          "object_types": {
+            "deal": {
+              "values": {
+                "stage": [
+                  "线索",
+                  "商机",
+                  "在跟"
+                ]
+              },
+              "links": {
+                "stakeholders": {
+                  "values": {
+                    "role": [
+                      "决策人"
+                    ]
+                  }
+                }
+              }
+            },
+            "record": {
+              "values": {
+                "kind": [
+                  "拜访"
+                ]
+              }
+            },
+            "stakeholder": {
+              "properties": {
+                "F": {
+                  "type": "text",
+                  "name": "Family",
+                  "name_zh": "家庭",
+                  "sensitivity": "personal"
+                }
+              }
+            }
+          },
+          "action_types": {
+            "record.add": {
+              "values": {
+                "kind": [
+                  "拜访"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "module": "collab",
+      "method": "GET",
+      "path": "/v1/module",
+      "status": 200,
+      "response": {
+        "id": "collab",
+        "api_version": 1,
+        "action_prefix": "work",
+        "enabled": true,
+        "features": [
+          "attention"
+        ]
+      }
+    },
+    {
+      "module": "future",
+      "method": "GET",
+      "path": "/v1/module",
+      "status": 200,
+      "response": {
+        "id": "future",
+        "api_version": 2,
+        "action_prefix": "future",
+        "enabled": true,
+        "features": [
+          "ontology"
+        ]
+      }
+    },
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/ontology",
+      "status": 200,
+      "response": {
+        "module": "sales",
+        "version": 1,
+        "object_types": {
+          "account": {
+            "label": "Account",
+            "label_zh": "客户单位",
+            "description": "An organisation a rep sells to. Private to its rep.",
+            "title": "name",
+            "implements": [],
+            "properties": {
+              "name": {
+                "type": "string",
+                "name": "Name",
+                "name_zh": "名称"
+              }
+            },
+            "links": {
+              "deals": {
+                "to": "sales:deal",
+                "many": true
+              }
+            }
+          },
+          "deal": {
+            "label": "Deal",
+            "label_zh": "商机项目",
+            "description": "One opportunity at an account, scored from its ledger.",
+            "title": "name",
+            "implements": [],
+            "properties": {
+              "account": {
+                "type": "ref",
+                "to": "sales:account"
+              },
+              "amount": {
+                "type": "money_fen"
+              },
+              "band": {
+                "type": "enum",
+                "values": [
+                  "A",
+                  "B",
+                  "C"
+                ],
+                "derived": true,
+                "sources": true
+              },
+              "name": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "text"
+              },
+              "score": {
+                "type": "integer",
+                "derived": true,
+                "sources": true
+              },
+              "stage": {
+                "type": "enum",
+                "derived": true,
+                "sources": true
+              }
+            },
+            "links": {
+              "items": {
+                "to": "sales:item",
+                "many": true
+              },
+              "records": {
+                "to": "sales:record",
+                "many": true
+              },
+              "stakeholders": {
+                "to": "sales:stakeholder",
+                "many": true,
+                "properties": {
+                  "role": {
+                    "type": "enum"
+                  }
+                }
+              },
+              "tickets": {
+                "to": "sales:ticket",
+                "many": true
+              }
+            }
+          },
+          "item": {
+            "label": "Meeting or to-do",
+            "label_zh": "日程待办",
+            "title": "title",
+            "implements": [
+              "t10:HasDeadline"
+            ],
+            "properties": {
+              "deadline": {
+                "type": "timestamp"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "links": {}
+          },
+          "record": {
+            "label": "Record",
+            "label_zh": "行动记录",
+            "description": "One fact in the ledger. Never edited; an undo writes a compensating record.",
+            "title": "summary",
+            "implements": [],
+            "properties": {
+              "at": {
+                "type": "timestamp"
+              },
+              "deal": {
+                "type": "ref",
+                "to": "sales:deal"
+              },
+              "kind": {
+                "type": "enum",
+                "values": [
+                  "stage",
+                  "undo"
+                ]
+              },
+              "summary": {
+                "type": "text"
+              },
+              "undoes": {
+                "type": "ref",
+                "to": "sales:record"
+              }
+            },
+            "links": {}
+          },
+          "stakeholder": {
+            "label": "Stakeholder",
+            "label_zh": "关键人",
+            "description": "A person at an account who matters to a deal.",
+            "title": "name",
+            "implements": [
+              "t10:Person"
+            ],
+            "properties": {
+              "account": {
+                "type": "ref",
+                "to": "sales:account"
+              },
+              "name": {
+                "type": "string",
+                "name": "Name",
+                "name_zh": "姓名"
+              },
+              "phone": {
+                "type": "string",
+                "sensitivity": "contact"
+              }
+            },
+            "links": {}
+          },
+          "ticket": {
+            "label": "Ticket",
+            "label_zh": "工单",
+            "title": "title",
+            "implements": [],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "work_item": {
+                "type": "ref",
+                "to": "collab:work_item"
+              }
+            },
+            "links": {}
+          }
+        },
+        "action_types": {
+          "deal.set_discount": {
+            "label": "Set the discount",
+            "label_zh": "设置折扣",
+            "on": "deal",
+            "params": {
+              "percent": {
+                "type": "decimal",
+                "required": true
+              }
+            },
+            "permission": "sales:deal.discount",
+            "idempotent": false,
+            "undo": false,
+            "agent": "never"
+          },
+          "deal.set_stage": {
+            "label": "Change stage",
+            "label_zh": "推进阶段",
+            "description": "Move the deal to another of the company's stages, citing the record that justifies it. Writes a stage record; the stage is recomputed from it.",
+            "on": "deal",
+            "params": {
+              "because": {
+                "type": "ref",
+                "to": "sales:record"
+              },
+              "to": {
+                "type": "enum",
+                "required": true
+              }
+            },
+            "permission": "sales:deal.update",
+            "idempotent": false,
+            "undo": false,
+            "agent": "propose"
+          },
+          "record.add": {
+            "label": "Add a record",
+            "label_zh": "记录",
+            "description": "Write one safe fact to the deal's ledger, such as a meeting held or something learned. kind is one of the company's kinds of record.",
+            "on": "deal",
+            "params": {
+              "kind": {
+                "type": "enum",
+                "required": true,
+                "label": true
+              },
+              "summary": {
+                "type": "text",
+                "required": true
+              }
+            },
+            "permission": "sales:record.add",
+            "idempotent": true,
+            "undo": true,
+            "undo_window": 86400,
+            "agent": "undoable"
+          },
+          "stakeholder.create": {
+            "label": "Add a person",
+            "label_zh": "新增关键人",
+            "params": {
+              "account": {
+                "type": "ref",
+                "to": "sales:account",
+                "required": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              }
+            },
+            "permission": "sales:stakeholder.create",
+            "idempotent": false,
+            "undo": false,
+            "agent": "propose"
+          },
+          "ticket.send": {
+            "label": "Send a ticket",
+            "label_zh": "发起工单",
+            "on": "deal",
+            "params": {
+              "title": {
+                "type": "string",
+                "required": true
+              }
+            },
+            "permission": "sales:ticket.send",
+            "idempotent": false,
+            "undo": false,
+            "agent": "propose"
+          }
+        },
+        "restricted": [
+          "deal.set_discount"
+        ],
+        "interfaces": [
+          "t10:HasDeadline",
+          "t10:Person"
+        ],
+        "events": {
+          "deal.stage_changed": {
+            "on": "deal"
+          }
+        },
+        "tenant": {
+          "revision": 3,
+          "object_types": {
+            "deal": {
+              "values": {
+                "stage": [
+                  "线索",
+                  "商机",
+                  "在跟"
+                ]
+              },
+              "links": {
+                "stakeholders": {
+                  "values": {
+                    "role": [
+                      "决策人"
+                    ]
+                  }
+                }
+              }
+            },
+            "record": {
+              "values": {
+                "kind": [
+                  "拜访"
+                ]
+              }
+            },
+            "stakeholder": {
+              "properties": {
+                "F": {
+                  "type": "text",
+                  "name": "Family",
+                  "name_zh": "家庭",
+                  "sensitivity": "personal"
+                }
+              }
+            }
+          },
+          "action_types": {
+            "record.add": {
+              "values": {
+                "kind": [
+                  "拜访"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/objects/deal/search",
+      "body": "{\"limit\":1,\"sort\":{\"desc\":true,\"property\":\"amount\"}}",
+      "status": 200,
+      "response": {
+        "objects": [
+          {
+            "ref": "sales:deal:deal_0002",
+            "type": "deal",
+            "title": "Line 2 upgrade",
+            "revision": 1,
+            "properties": {
+              "account": "sales:account:acc_0001",
+              "amount": 12000000,
+              "band": "C",
+              "name": "Line 2 upgrade",
+              "notes": "",
+              "score": 0,
+              "stage": "线索"
+            },
+            "actions": [
+              {
+                "action": "deal.set_discount",
+                "allowed": false,
+                "reason": "forbidden"
+              },
+              {
+                "action": "deal.set_stage",
+                "allowed": true
+              },
+              {
+                "action": "record.add",
+                "allowed": true
+              },
+              {
+                "action": "ticket.send",
+                "allowed": true
+              }
+            ]
+          }
+        ],
+        "next_cursor": "eyJzIjoiYW1vdW50IiwiZCI6dHJ1ZSwidiI6MTIwMDAwMDAsImlkIjoiZGVhbF8wMDAyIn0"
+      }
+    },
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/objects/deal/deal_0002",
+      "status": 200,
+      "response": {
+        "ref": "sales:deal:deal_0002",
+        "type": "deal",
+        "title": "Line 2 upgrade",
+        "revision": 1,
+        "properties": {
+          "account": "sales:account:acc_0001",
+          "amount": 12000000,
+          "band": "C",
+          "name": "Line 2 upgrade",
+          "notes": "",
+          "score": 0,
+          "stage": "线索"
+        },
+        "actions": [
+          {
+            "action": "deal.set_discount",
+            "allowed": false,
+            "reason": "forbidden"
+          },
+          {
+            "action": "deal.set_stage",
+            "allowed": true
+          },
+          {
+            "action": "record.add",
+            "allowed": true
+          },
+          {
+            "action": "ticket.send",
+            "allowed": true
+          }
+        ]
+      }
+    },
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/objects/deal/deal_0006",
+      "status": 404,
+      "response": {
+        "error": "not_found"
+      }
+    },
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/objects/deal/deal_0002/links/stakeholders?limit=10",
+      "status": 200,
+      "response": {
+        "objects": [
+          {
+            "ref": "sales:stakeholder:sh_0004",
+            "type": "stakeholder",
+            "title": "Wang",
+            "revision": 1,
+            "properties": {
+              "account": "sales:account:acc_0001",
+              "name": "Wang",
+              "phone": "13800000000"
+            },
+            "actions": [],
+            "link": {
+              "role": "决策人"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/objects/resolve",
+      "body": "{\"refs\":[\"sales:deal:deal_0002\",\"sales:deal:deal_0006\"]}",
+      "status": 200,
+      "response": {
+        "objects": [
+          {
+            "ref": "sales:deal:deal_0002",
+            "type": "deal",
+            "title": "Line 2 upgrade",
+            "actions": [
+              {
+                "action": "deal.set_discount",
+                "allowed": false,
+                "reason": "forbidden"
+              },
+              {
+                "action": "deal.set_stage",
+                "allowed": true
+              },
+              {
+                "action": "record.add",
+                "allowed": true
+              },
+              {
+                "action": "ticket.send",
+                "allowed": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/actions/ticket.send/validate",
+      "body": "{\"object\":\"sales:deal:deal_0002\",\"params\":{}}",
+      "status": 200,
+      "response": {
+        "errors": [
+          {
+            "param": "title",
+            "code": "required"
+          }
+        ],
+        "valid": false
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/actions/ticket.send/apply",
+      "body": "{\"object\":\"sales:deal:deal_0002\",\"params\":{\"title\":\"x\"},\"revision\":99}",
+      "status": 409,
+      "response": {
+        "error": "stale_revision"
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/actions/record.add/apply",
+      "body": "{\"object\":\"sales:deal:deal_0002\",\"params\":{\"kind\":\"拜访\",\"summary\":\"met the plant manager\"},\"revision\":1}",
+      "status": 200,
+      "response": {
+        "object": {
+          "ref": "sales:deal:deal_0002",
+          "type": "deal",
+          "title": "Line 2 upgrade",
+          "revision": 2,
+          "properties": {
+            "account": "sales:account:acc_0001",
+            "amount": 12000000,
+            "band": "B",
+            "name": "Line 2 upgrade",
+            "notes": "",
+            "score": 10,
+            "stage": "线索"
+          },
+          "actions": [
+            {
+              "action": "deal.set_discount",
+              "allowed": false,
+              "reason": "forbidden"
+            },
+            {
+              "action": "deal.set_stage",
+              "allowed": true
+            },
+            {
+              "action": "record.add",
+              "allowed": true
+            },
+            {
+              "action": "ticket.send",
+              "allowed": true
+            }
+          ]
+        },
+        "undo": {
+          "id": "undo_aa14bac53e79a961ba3ffba940f52ad2",
+          "expires_at": "2026-11-27T08:00:00Z"
+        }
+      }
+    },
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/objects/deal/deal_0002?sources=score",
+      "status": 200,
+      "response": {
+        "ref": "sales:deal:deal_0002",
+        "type": "deal",
+        "title": "Line 2 upgrade",
+        "revision": 2,
+        "properties": {
+          "account": "sales:account:acc_0001",
+          "amount": 12000000,
+          "band": "B",
+          "name": "Line 2 upgrade",
+          "notes": "",
+          "score": 10,
+          "stage": "线索"
+        },
+        "actions": [
+          {
+            "action": "deal.set_discount",
+            "allowed": false,
+            "reason": "forbidden"
+          },
+          {
+            "action": "deal.set_stage",
+            "allowed": true
+          },
+          {
+            "action": "record.add",
+            "allowed": true
+          },
+          {
+            "action": "ticket.send",
+            "allowed": true
+          }
+        ],
+        "sources": {
+          "score": [
+            "sales:record:rec_0007"
+          ]
+        }
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/undo/undo_aa14bac53e79a961ba3ffba940f52ad2",
+      "body": "{}",
+      "status": 200,
+      "response": {
+        "object": {
+          "ref": "sales:deal:deal_0002",
+          "type": "deal",
+          "title": "Line 2 upgrade",
+          "revision": 3,
+          "properties": {
+            "account": "sales:account:acc_0001",
+            "amount": 12000000,
+            "band": "C",
+            "name": "Line 2 upgrade",
+            "notes": "",
+            "score": 0,
+            "stage": "线索"
+          },
+          "actions": [
+            {
+              "action": "deal.set_discount",
+              "allowed": false,
+              "reason": "forbidden"
+            },
+            {
+              "action": "deal.set_stage",
+              "allowed": true
+            },
+            {
+              "action": "record.add",
+              "allowed": true
+            },
+            {
+              "action": "ticket.send",
+              "allowed": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "module": "sales",
+      "method": "GET",
+      "path": "/v1/proposals",
+      "status": 200,
+      "response": {
+        "proposals": [
+          {
+            "id": "proposal_ffc197efb2d44063a7b46d67c7aa737e",
+            "action": "ticket.send",
+            "object": "sales:deal:deal_0002",
+            "params": {
+              "title": "Visit"
+            },
+            "agent": "agent:fixture",
+            "created_at": "2026-11-26T08:01:00Z",
+            "expires_at": "2026-12-03T08:01:00Z"
+          },
+          {
+            "id": "proposal_0ed58a0bb915b2419dcea3beecb29216",
+            "action": "ticket.send",
+            "object": "sales:deal:deal_0002",
+            "params": {
+              "title": "Quote"
+            },
+            "agent": "agent:fixture",
+            "created_at": "2026-11-26T08:00:00Z",
+            "expires_at": "2026-12-03T08:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/proposals/proposal_0ed58a0bb915b2419dcea3beecb29216/confirm",
+      "body": "{\"params\":{\"title\":\"Quote, revised\"}}",
+      "status": 200,
+      "response": {
+        "object": {
+          "ref": "sales:deal:deal_0002",
+          "type": "deal",
+          "title": "Line 2 upgrade",
+          "revision": 4,
+          "properties": {
+            "account": "sales:account:acc_0001",
+            "amount": 12000000,
+            "band": "C",
+            "name": "Line 2 upgrade",
+            "notes": "",
+            "score": 0,
+            "stage": "线索"
+          },
+          "actions": [
+            {
+              "action": "deal.set_discount",
+              "allowed": false,
+              "reason": "forbidden"
+            },
+            {
+              "action": "deal.set_stage",
+              "allowed": true
+            },
+            {
+              "action": "record.add",
+              "allowed": true
+            },
+            {
+              "action": "ticket.send",
+              "allowed": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "module": "sales",
+      "method": "POST",
+      "path": "/v1/proposals/proposal_ffc197efb2d44063a7b46d67c7aa737e/dismiss",
+      "body": "{}",
+      "status": 200,
+      "response": {
+        "id": "proposal_ffc197efb2d44063a7b46d67c7aa737e",
+        "status": "dismissed"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "load",
+      "op": "load",
+      "token": "person",
+      "args": {},
+      "result": {
+        "ontologies": [
+          "sales"
+        ],
+        "unavailable": [
+          "down"
+        ]
+      }
+    },
+    {
+      "name": "describe",
+      "op": "describe",
+      "token": "person",
+      "args": {
+        "module": "sales"
+      },
+      "result": {
+        "action_types": {
+          "deal.set_discount": {
+            "agent": "never",
+            "idempotent": false,
+            "label": "Set the discount",
+            "label_zh": "设置折扣",
+            "on": "deal",
+            "params": {
+              "percent": {
+                "required": true,
+                "type": "decimal"
+              }
+            },
+            "permission": "sales:deal.discount",
+            "undo": false
+          },
+          "deal.set_stage": {
+            "agent": "propose",
+            "description": "Move the deal to another of the company's stages, citing the record that justifies it. Writes a stage record; the stage is recomputed from it.",
+            "idempotent": false,
+            "label": "Change stage",
+            "label_zh": "推进阶段",
+            "on": "deal",
+            "params": {
+              "because": {
+                "to": "sales:record",
+                "type": "ref"
+              },
+              "to": {
+                "required": true,
+                "type": "enum"
+              }
+            },
+            "permission": "sales:deal.update",
+            "undo": false
+          },
+          "record.add": {
+            "agent": "undoable",
+            "description": "Write one safe fact to the deal's ledger, such as a meeting held or something learned. kind is one of the company's kinds of record.",
+            "idempotent": true,
+            "label": "Add a record",
+            "label_zh": "记录",
+            "on": "deal",
+            "params": {
+              "kind": {
+                "label": true,
+                "required": true,
+                "type": "enum"
+              },
+              "summary": {
+                "required": true,
+                "type": "text"
+              }
+            },
+            "permission": "sales:record.add",
+            "undo": true,
+            "undo_window": 86400
+          },
+          "stakeholder.create": {
+            "agent": "propose",
+            "idempotent": false,
+            "label": "Add a person",
+            "label_zh": "新增关键人",
+            "params": {
+              "account": {
+                "required": true,
+                "to": "sales:account",
+                "type": "ref"
+              },
+              "name": {
+                "required": true,
+                "type": "string"
+              }
+            },
+            "permission": "sales:stakeholder.create",
+            "undo": false
+          },
+          "ticket.send": {
+            "agent": "propose",
+            "idempotent": false,
+            "label": "Send a ticket",
+            "label_zh": "发起工单",
+            "on": "deal",
+            "params": {
+              "title": {
+                "required": true,
+                "type": "string"
+              }
+            },
+            "permission": "sales:ticket.send",
+            "undo": false
+          }
+        },
+        "events": {
+          "deal.stage_changed": {
+            "on": "deal"
+          }
+        },
+        "interfaces": [
+          "t10:HasDeadline",
+          "t10:Person"
+        ],
+        "module": "sales",
+        "object_types": {
+          "account": {
+            "description": "An organisation a rep sells to. Private to its rep.",
+            "implements": [],
+            "label": "Account",
+            "label_zh": "客户单位",
+            "links": {
+              "deals": {
+                "many": true,
+                "to": "sales:deal"
+              }
+            },
+            "properties": {
+              "name": {
+                "name": "Name",
+                "name_zh": "名称",
+                "type": "string"
+              }
+            },
+            "title": "name"
+          },
+          "deal": {
+            "description": "One opportunity at an account, scored from its ledger.",
+            "implements": [],
+            "label": "Deal",
+            "label_zh": "商机项目",
+            "links": {
+              "items": {
+                "many": true,
+                "to": "sales:item"
+              },
+              "records": {
+                "many": true,
+                "to": "sales:record"
+              },
+              "stakeholders": {
+                "many": true,
+                "properties": {
+                  "role": {
+                    "type": "enum"
+                  }
+                },
+                "to": "sales:stakeholder"
+              },
+              "tickets": {
+                "many": true,
+                "to": "sales:ticket"
+              }
+            },
+            "properties": {
+              "account": {
+                "to": "sales:account",
+                "type": "ref"
+              },
+              "amount": {
+                "type": "money_fen"
+              },
+              "band": {
+                "derived": true,
+                "sources": true,
+                "type": "enum",
+                "values": [
+                  "A",
+                  "B",
+                  "C"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "text"
+              },
+              "score": {
+                "derived": true,
+                "sources": true,
+                "type": "integer"
+              },
+              "stage": {
+                "derived": true,
+                "sources": true,
+                "type": "enum"
+              }
+            },
+            "title": "name"
+          },
+          "item": {
+            "implements": [
+              "t10:HasDeadline"
+            ],
+            "label": "Meeting or to-do",
+            "label_zh": "日程待办",
+            "links": {},
+            "properties": {
+              "deadline": {
+                "type": "timestamp"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "title": "title"
+          },
+          "record": {
+            "description": "One fact in the ledger. Never edited; an undo writes a compensating record.",
+            "implements": [],
+            "label": "Record",
+            "label_zh": "行动记录",
+            "links": {},
+            "properties": {
+              "at": {
+                "type": "timestamp"
+              },
+              "deal": {
+                "to": "sales:deal",
+                "type": "ref"
+              },
+              "kind": {
+                "type": "enum",
+                "values": [
+                  "stage",
+                  "undo"
+                ]
+              },
+              "summary": {
+                "type": "text"
+              },
+              "undoes": {
+                "to": "sales:record",
+                "type": "ref"
+              }
+            },
+            "title": "summary"
+          },
+          "stakeholder": {
+            "description": "A person at an account who matters to a deal.",
+            "implements": [
+              "t10:Person"
+            ],
+            "label": "Stakeholder",
+            "label_zh": "关键人",
+            "links": {},
+            "properties": {
+              "account": {
+                "to": "sales:account",
+                "type": "ref"
+              },
+              "name": {
+                "name": "Name",
+                "name_zh": "姓名",
+                "type": "string"
+              },
+              "phone": {
+                "sensitivity": "contact",
+                "type": "string"
+              }
+            },
+            "title": "name"
+          },
+          "ticket": {
+            "implements": [],
+            "label": "Ticket",
+            "label_zh": "工单",
+            "links": {},
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "work_item": {
+                "to": "collab:work_item",
+                "type": "ref"
+              }
+            },
+            "title": "title"
+          }
+        },
+        "restricted": [
+          "deal.set_discount"
+        ],
+        "tenant": {
+          "action_types": {
+            "record.add": {
+              "values": {
+                "kind": [
+                  "拜访"
+                ]
+              }
+            }
+          },
+          "object_types": {
+            "deal": {
+              "links": {
+                "stakeholders": {
+                  "values": {
+                    "role": [
+                      "决策人"
+                    ]
+                  }
+                }
+              },
+              "values": {
+                "stage": [
+                  "线索",
+                  "商机",
+                  "在跟"
+                ]
+              }
+            },
+            "record": {
+              "values": {
+                "kind": [
+                  "拜访"
+                ]
+              }
+            },
+            "stakeholder": {
+              "properties": {
+                "F": {
+                  "name": "Family",
+                  "name_zh": "家庭",
+                  "sensitivity": "personal",
+                  "type": "text"
+                }
+              }
+            }
+          },
+          "revision": 3
+        },
+        "version": 1
+      }
+    },
+    {
+      "name": "search a page",
+      "op": "search",
+      "token": "person",
+      "args": {
+        "module": "sales",
+        "query": {
+          "limit": 1,
+          "sort": {
+            "desc": true,
+            "property": "amount"
+          }
+        },
+        "type": "deal"
+      },
+      "result": {
+        "next_cursor": "eyJzIjoiYW1vdW50IiwiZCI6dHJ1ZSwidiI6MTIwMDAwMDAsImlkIjoiZGVhbF8wMDAyIn0",
+        "objects": [
+          {
+            "actions": [
+              {
+                "action": "deal.set_discount",
+                "allowed": false,
+                "reason": "forbidden"
+              },
+              {
+                "action": "deal.set_stage",
+                "allowed": true
+              },
+              {
+                "action": "record.add",
+                "allowed": true
+              },
+              {
+                "action": "ticket.send",
+                "allowed": true
+              }
+            ],
+            "properties": {
+              "account": "sales:account:acc_0001",
+              "amount": 12000000,
+              "band": "C",
+              "name": "Line 2 upgrade",
+              "notes": "",
+              "score": 0,
+              "stage": "线索"
+            },
+            "ref": "sales:deal:deal_0002",
+            "revision": 1,
+            "title": "Line 2 upgrade",
+            "type": "deal"
+          }
+        ]
+      }
+    },
+    {
+      "name": "get a deal",
+      "op": "get",
+      "token": "person",
+      "args": {
+        "ref": "sales:deal:deal_0002"
+      },
+      "result": {
+        "actions": [
+          {
+            "action": "deal.set_discount",
+            "allowed": false,
+            "reason": "forbidden"
+          },
+          {
+            "action": "deal.set_stage",
+            "allowed": true
+          },
+          {
+            "action": "record.add",
+            "allowed": true
+          },
+          {
+            "action": "ticket.send",
+            "allowed": true
+          }
+        ],
+        "properties": {
+          "account": "sales:account:acc_0001",
+          "amount": 12000000,
+          "band": "C",
+          "name": "Line 2 upgrade",
+          "notes": "",
+          "score": 0,
+          "stage": "线索"
+        },
+        "ref": "sales:deal:deal_0002",
+        "revision": 1,
+        "title": "Line 2 upgrade",
+        "type": "deal"
+      }
+    },
+    {
+      "name": "a hidden deal",
+      "op": "get",
+      "token": "person",
+      "args": {
+        "ref": "sales:deal:deal_0006"
+      },
+      "error": {
+        "status": 404,
+        "code": "not_found"
+      }
+    },
+    {
+      "name": "follow a link",
+      "op": "links",
+      "token": "person",
+      "args": {
+        "limit": 10,
+        "link": "stakeholders",
+        "ref": "sales:deal:deal_0002"
+      },
+      "result": {
+        "objects": [
+          {
+            "actions": [],
+            "link": {
+              "role": "决策人"
+            },
+            "properties": {
+              "account": "sales:account:acc_0001",
+              "name": "Wang",
+              "phone": "13800000000"
+            },
+            "ref": "sales:stakeholder:sh_0004",
+            "revision": 1,
+            "title": "Wang",
+            "type": "stakeholder"
+          }
+        ]
+      }
+    },
+    {
+      "name": "resolve a mixed list",
+      "op": "resolve",
+      "token": "person",
+      "args": {
+        "refs": [
+          "sales:deal:deal_0002",
+          "sales:deal:deal_0006",
+          "collab:work_item:b",
+          "crm:deal:c"
+        ]
+      },
+      "result": {
+        "objects": [
+          {
+            "actions": [
+              {
+                "action": "deal.set_discount",
+                "allowed": false,
+                "reason": "forbidden"
+              },
+              {
+                "action": "deal.set_stage",
+                "allowed": true
+              },
+              {
+                "action": "record.add",
+                "allowed": true
+              },
+              {
+                "action": "ticket.send",
+                "allowed": true
+              }
+            ],
+            "ref": "sales:deal:deal_0002",
+            "title": "Line 2 upgrade",
+            "type": "deal"
+          }
+        ],
+        "unresolved": [
+          "collab",
+          "crm"
+        ]
+      }
+    },
+    {
+      "name": "validate",
+      "op": "validate",
+      "token": "person",
+      "args": {
+        "action": "ticket.send",
+        "module": "sales",
+        "request": {
+          "object": "sales:deal:deal_0002",
+          "params": {}
+        }
+      },
+      "result": {
+        "errors": [
+          {
+            "code": "required",
+            "param": "title"
+          }
+        ],
+        "valid": false
+      }
+    },
+    {
+      "name": "a stale revision",
+      "op": "apply",
+      "token": "person",
+      "args": {
+        "action": "ticket.send",
+        "module": "sales",
+        "request": {
+          "object": "sales:deal:deal_0002",
+          "params": {
+            "title": "x"
+          },
+          "revision": 99
+        }
+      },
+      "error": {
+        "status": 409,
+        "code": "stale_revision"
+      }
+    },
+    {
+      "name": "apply",
+      "op": "apply",
+      "token": "person",
+      "args": {
+        "action": "record.add",
+        "key": "fixture-0001",
+        "module": "sales",
+        "request": {
+          "object": "sales:deal:deal_0002",
+          "params": {
+            "kind": "拜访",
+            "summary": "met the plant manager"
+          },
+          "revision": 1
+        }
+      },
+      "result": {
+        "object": {
+          "actions": [
+            {
+              "action": "deal.set_discount",
+              "allowed": false,
+              "reason": "forbidden"
+            },
+            {
+              "action": "deal.set_stage",
+              "allowed": true
+            },
+            {
+              "action": "record.add",
+              "allowed": true
+            },
+            {
+              "action": "ticket.send",
+              "allowed": true
+            }
+          ],
+          "properties": {
+            "account": "sales:account:acc_0001",
+            "amount": 12000000,
+            "band": "B",
+            "name": "Line 2 upgrade",
+            "notes": "",
+            "score": 10,
+            "stage": "线索"
+          },
+          "ref": "sales:deal:deal_0002",
+          "revision": 2,
+          "title": "Line 2 upgrade",
+          "type": "deal"
+        },
+        "undo": {
+          "expires_at": "2026-11-27T08:00:00Z",
+          "id": "undo_aa14bac53e79a961ba3ffba940f52ad2"
+        }
+      }
+    },
+    {
+      "name": "sources",
+      "op": "get",
+      "token": "person",
+      "args": {
+        "ref": "sales:deal:deal_0002",
+        "sources": "score"
+      },
+      "result": {
+        "actions": [
+          {
+            "action": "deal.set_discount",
+            "allowed": false,
+            "reason": "forbidden"
+          },
+          {
+            "action": "deal.set_stage",
+            "allowed": true
+          },
+          {
+            "action": "record.add",
+            "allowed": true
+          },
+          {
+            "action": "ticket.send",
+            "allowed": true
+          }
+        ],
+        "properties": {
+          "account": "sales:account:acc_0001",
+          "amount": 12000000,
+          "band": "B",
+          "name": "Line 2 upgrade",
+          "notes": "",
+          "score": 10,
+          "stage": "线索"
+        },
+        "ref": "sales:deal:deal_0002",
+        "revision": 2,
+        "sources": {
+          "score": [
+            "sales:record:rec_0007"
+          ]
+        },
+        "title": "Line 2 upgrade",
+        "type": "deal"
+      }
+    },
+    {
+      "name": "undo",
+      "op": "undo",
+      "token": "person",
+      "args": {
+        "id": "undo_aa14bac53e79a961ba3ffba940f52ad2",
+        "module": "sales"
+      },
+      "result": {
+        "object": {
+          "actions": [
+            {
+              "action": "deal.set_discount",
+              "allowed": false,
+              "reason": "forbidden"
+            },
+            {
+              "action": "deal.set_stage",
+              "allowed": true
+            },
+            {
+              "action": "record.add",
+              "allowed": true
+            },
+            {
+              "action": "ticket.send",
+              "allowed": true
+            }
+          ],
+          "properties": {
+            "account": "sales:account:acc_0001",
+            "amount": 12000000,
+            "band": "C",
+            "name": "Line 2 upgrade",
+            "notes": "",
+            "score": 0,
+            "stage": "线索"
+          },
+          "ref": "sales:deal:deal_0002",
+          "revision": 3,
+          "title": "Line 2 upgrade",
+          "type": "deal"
+        }
+      }
+    },
+    {
+      "name": "proposals",
+      "op": "proposals",
+      "token": "person",
+      "args": {
+        "module": "sales"
+      },
+      "result": {
+        "proposals": [
+          {
+            "action": "ticket.send",
+            "agent": "agent:fixture",
+            "created_at": "2026-11-26T08:01:00Z",
+            "expires_at": "2026-12-03T08:01:00Z",
+            "id": "proposal_ffc197efb2d44063a7b46d67c7aa737e",
+            "object": "sales:deal:deal_0002",
+            "params": {
+              "title": "Visit"
+            }
+          },
+          {
+            "action": "ticket.send",
+            "agent": "agent:fixture",
+            "created_at": "2026-11-26T08:00:00Z",
+            "expires_at": "2026-12-03T08:00:00Z",
+            "id": "proposal_0ed58a0bb915b2419dcea3beecb29216",
+            "object": "sales:deal:deal_0002",
+            "params": {
+              "title": "Quote"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "confirm with an edit",
+      "op": "confirm",
+      "token": "person",
+      "args": {
+        "body": {
+          "params": {
+            "title": "Quote, revised"
+          }
+        },
+        "id": "proposal_0ed58a0bb915b2419dcea3beecb29216",
+        "module": "sales"
+      },
+      "result": {
+        "object": {
+          "actions": [
+            {
+              "action": "deal.set_discount",
+              "allowed": false,
+              "reason": "forbidden"
+            },
+            {
+              "action": "deal.set_stage",
+              "allowed": true
+            },
+            {
+              "action": "record.add",
+              "allowed": true
+            },
+            {
+              "action": "ticket.send",
+              "allowed": true
+            }
+          ],
+          "properties": {
+            "account": "sales:account:acc_0001",
+            "amount": 12000000,
+            "band": "C",
+            "name": "Line 2 upgrade",
+            "notes": "",
+            "score": 0,
+            "stage": "线索"
+          },
+          "ref": "sales:deal:deal_0002",
+          "revision": 4,
+          "title": "Line 2 upgrade",
+          "type": "deal"
+        }
+      }
+    },
+    {
+      "name": "dismiss",
+      "op": "dismiss",
+      "token": "person",
+      "args": {
+        "id": "proposal_ffc197efb2d44063a7b46d67c7aa737e",
+        "module": "sales"
+      },
+      "result": {}
+    },
+    {
+      "name": "a service's own token",
+      "op": "get",
+      "token": "service",
+      "args": {
+        "ref": "sales:deal:deal_0002"
+      },
+      "error": {
+        "status": 0,
+        "code": "person_token_required"
+      }
+    },
+    {
+      "name": "a delegated token",
+      "op": "apply",
+      "token": "delegated",
+      "args": {
+        "action": "record.add",
+        "module": "sales",
+        "request": {}
+      },
+      "error": {
+        "status": 0,
+        "code": "person_token_required"
+      }
+    },
+    {
+      "name": "a module that isn't loaded",
+      "op": "get",
+      "token": "person",
+      "args": {
+        "ref": "crm:deal:c"
+      },
+      "error": {
+        "status": 404,
+        "code": "unknown_module"
+      }
+    }
+  ]
+}
