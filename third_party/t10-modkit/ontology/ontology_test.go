@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -44,7 +45,7 @@ type clock struct {
 	now time.Time
 }
 
-func (c *clock) Now() time.Time       { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+func (c *clock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
 func (c *clock) add(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
 
 func newWorld(t *testing.T) *world {
@@ -275,7 +276,9 @@ func thingType() ontology.ObjectType[string, string] {
 		Properties: map[string]ontology.Property{"name": {Type: ontology.String}},
 		Search:     func(context.Context, string, ontology.Query) ([]string, error) { return nil, nil },
 		Get:        func(context.Context, string, string) (string, error) { return "", ontology.ErrNotFound },
-		View:       func(_ context.Context, _ string, r string) ontology.Object { return ontology.Object{ID: r, Title: r, Revision: 1} }}
+		View: func(_ context.Context, _ string, r string) ontology.Object {
+			return ontology.Object{ID: r, Title: r, Revision: 1}
+		}}
 }
 
 func TestCheckRefusesBrokenCores(t *testing.T) {
@@ -286,7 +289,9 @@ func TestCheckRefusesBrokenCores(t *testing.T) {
 		ontology.AddObject(reg, thingType())
 		return reg
 	}
-	apply := func(context.Context, string, string, ontology.Input) (ontology.Result, error) { return ontology.Result{}, nil }
+	apply := func(context.Context, string, string, ontology.Input) (ontology.Result, error) {
+		return ontology.Result{}, nil
+	}
 	cases := map[string]struct {
 		build func(*ontology.Registry[string])
 		want  string
@@ -296,14 +301,18 @@ func TestCheckRefusesBrokenCores(t *testing.T) {
 		}, "must be undo and idempotent"},
 		"undoable not idempotent": {func(r *ontology.Registry[string]) {
 			ontology.AddAction(r, ontology.ActionType[string, string]{Name: "thing.a", Label: "A", LabelZh: "甲", On: "thing", Permission: "x:a", Undo: true, UndoWindow: time.Hour, Agent: ontology.Undoable, Apply: apply,
-				Revert: func(context.Context, string, ontology.Undoing) (ontology.Result, error) { return ontology.Result{}, nil }})
+				Revert: func(context.Context, string, ontology.Undoing) (ontology.Result, error) {
+					return ontology.Result{}, nil
+				}})
 		}, "must be undo and idempotent"},
 		"restricted with another tier": {func(r *ontology.Registry[string]) {
 			ontology.AddAction(r, ontology.ActionType[string, string]{Name: "thing.pay", Label: "Pay", LabelZh: "付", On: "thing", Permission: "x:pay", Agent: ontology.Propose, Apply: apply})
 		}, "restricted: thing.pay has tier propose"},
 		"a record type that isn't the object's": {func(r *ontology.Registry[string]) {
 			ontology.AddAction(r, ontology.ActionType[string, int]{Name: "thing.a", Label: "A", LabelZh: "甲", On: "thing", Permission: "x:a", Agent: ontology.Never,
-				Apply: func(context.Context, string, int, ontology.Input) (ontology.Result, error) { return ontology.Result{}, nil }})
+				Apply: func(context.Context, string, int, ontology.Input) (ontology.Result, error) {
+					return ontology.Result{}, nil
+				}})
 		}, "isn't thing's"},
 	}
 	for name, tc := range cases {
@@ -851,5 +860,50 @@ func TestToolsAct(t *testing.T) {
 	out, isErr = w.tool("sales_act", noPerm, map[string]any{"action": "record.add", "object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "x"}, "request_id": "req-00000004"})
 	if !isErr || !strings.HasPrefix(toolText(out), "forbidden") || len(w.m.Records()) != n {
 		t.Fatalf("no permission: %v", out)
+	}
+}
+
+// A module's own errors reach the contract's codes through Errors, and a title from
+// a sensitive property is masked for an agent.
+func TestModuleErrorsAndSensitiveTitles(t *testing.T) {
+	missing := errors.New("the module's own not-found")
+	reg := ontology.New(ontology.Options[string]{Module: "x", Prefix: "x", Version: 1,
+		Authenticate: func(*http.Request) (string, ontology.Token, error) { return "u", ontology.PersonToken, nil },
+		Who:          func(string) ontology.Who { return ontology.Who{Tenant: "t", User: "u"} }, Can: func(string, string) bool { return true },
+		Errors: func(err error) error {
+			if errors.Is(err, missing) {
+				return ontology.ErrNotFound
+			}
+			return err
+		}})
+	ontology.AddObject(reg, ontology.ObjectType[string, string]{Name: "person", Label: "Person", LabelZh: "人", Title: "name",
+		Properties: map[string]ontology.Property{"name": {Type: ontology.String, Sensitivity: ontology.Identity}},
+		Search:     func(context.Context, string, ontology.Query) ([]string, error) { return []string{"p1"}, nil },
+		Get: func(_ context.Context, _ string, id string) (string, error) {
+			if id != "p1" {
+				return "", missing
+			}
+			return id, nil
+		},
+		View: func(_ context.Context, _ string, r string) ontology.Object {
+			return ontology.Object{ID: r, Title: "Wang", Revision: 1, Properties: map[string]any{"name": "Wang"}}
+		}})
+	if err := reg.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.GetObject(context.Background(), "u", "person", "p2", ""); !errors.Is(err, ontology.ErrNotFound) {
+		t.Fatalf("a module's not-found: %v", err)
+	}
+	if got, _ := reg.Resolve(context.Background(), "u", []string{"x:person:p2", "x:person:p1"}); len(got) != 1 || got[0].Title != "Wang" {
+		t.Fatalf("resolve: %+v", got)
+	}
+	for _, tool := range reg.Tools() {
+		if tool.Name == "x_get" {
+			out := tool.Run(context.Background(), "u", "agent", json.RawMessage(`{"ref":"x:person:p1"}`))
+			text := out["content"].([]map[string]any)[0]["text"].(string)
+			if strings.Contains(text, "Wang") || !strings.Contains(text, `"title":"***"`) {
+				t.Fatalf("an agent sees: %s", text)
+			}
+		}
 	}
 }

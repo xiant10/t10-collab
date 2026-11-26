@@ -201,7 +201,9 @@ func breaking(rule string, next http.Handler) http.Handler {
 		case rule == "unknown-type" && v["error"] == "unknown_type":
 			status, body = 200, []byte(`{"objects":[]}`)
 		case rule == "resolve" && path == "/v1/objects/resolve":
-			edit(func() { v["objects"] = append(v["objects"].([]any), map[string]any{"ref": "sales:deal:deal_0004", "type": "deal", "title": "Hidden", "actions": []any{}}) })
+			edit(func() {
+				v["objects"] = append(v["objects"].([]any), map[string]any{"ref": "sales:deal:deal_0004", "type": "deal", "title": "Hidden", "actions": []any{}})
+			})
 		case rule == "forbidden" && status == 403:
 			status = 404
 		case rule == "stale" && v["error"] == "stale_revision":

@@ -297,7 +297,9 @@ func (m *Module) derived(d *Deal) (stage string, score int64, band string, stage
 	return stage, score, band, stageSrc, scoreSrc
 }
 
-func (m *Module) mine(c Caller, tenant, owner string) bool { return c.Tenant == tenant && c.User == owner }
+func (m *Module) mine(c Caller, tenant, owner string) bool {
+	return c.Tenant == tenant && c.User == owner
+}
 
 // dealVisible: a rep sees their own deals, a manager every deal in the tenant.
 func (m *Module) dealVisible(c Caller, d *Deal) bool {
@@ -849,7 +851,7 @@ func (m *Module) declareActions() {
 		Name: "ticket.send", Label: "Send a ticket", LabelZh: "发起工单", On: "deal",
 		Params:     map[string]ontology.Param{"title": {Type: ontology.String, Required: true}},
 		Permission: "sales:ticket.send", Agent: ontology.Propose,
-		Available:  func(_ context.Context, c Caller, d *Deal) string { return m.own(c, d) },
+		Available: func(_ context.Context, c Caller, d *Deal) string { return m.own(c, d) },
 		Apply: func(_ context.Context, c Caller, d *Deal, in ontology.Input) (ontology.Result, error) {
 			defer m.locked()()
 			if err := m.fresh(d, in.Revision); err != nil {

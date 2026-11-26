@@ -48,6 +48,10 @@ type Options[C any] struct {
 	// the module's own database: ontology/proposals and ontology/undo have them.
 	Proposals ProposalStore
 	Undo      UndoStore
+	// Errors maps the module's own errors, such as its store's not-found, to the
+	// contract's *Error. Without it, or when it answers another error, an error
+	// that isn't an *Error answers 500 unavailable.
+	Errors func(error) error
 	// Now is the clock, time.Now by default.
 	Now func() time.Time
 }
@@ -202,7 +206,9 @@ type actionEntry[C any] struct {
 	window    time.Duration
 }
 
-func (r *Registry[C]) fail(format string, args ...any) { r.errs = append(r.errs, fmt.Sprintf(format, args...)) }
+func (r *Registry[C]) fail(format string, args ...any) {
+	r.errs = append(r.errs, fmt.Sprintf(format, args...))
+}
 
 // AddObject declares an object type.
 func AddObject[C, R any](reg *Registry[C], t ObjectType[C, R]) {
