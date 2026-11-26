@@ -3,7 +3,8 @@
 Shared Go plumbing for t10's services: live org reads (`people`), random IDs
 (`ids`), keyset cursors (`page`), Postgres migrations (`pgdb`), request traces
 (`telemetry`), JSON bodies and the error body (`httpjson`), web sign-in
-(`websession`), the app frame (`frame`) and docs over MCP (`docsmcp`). Business policy
+(`websession`), the app frame (`frame`), docs over MCP (`docsmcp`), and a module's
+ontology, with its stores and clients (`ontology`). Business policy
 stays in each consumer. `people.Member` always reads fresh; its separate reports
 cache is not suitable for knowledge membership authorization.
 
