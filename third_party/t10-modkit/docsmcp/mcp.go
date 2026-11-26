@@ -92,8 +92,23 @@ func (h *Handler) Docs() []Doc {
 	return out
 }
 
-// Versions this server speaks, newest first.
-var versions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
+// Versions are the MCP protocol versions t10's servers speak, newest first.
+var Versions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
+
+var versions = Versions
+
+// Negotiate is the version to answer an initialize with: the client's when it's
+// one of Versions, else the newest.
+func Negotiate(params json.RawMessage) string {
+	var p struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	_ = json.Unmarshal(params, &p)
+	if slices.Contains(Versions, p.ProtocolVersion) {
+		return p.ProtocolVersion
+	}
+	return Versions[0]
+}
 
 const (
 	parseError     = -32700

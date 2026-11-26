@@ -142,7 +142,28 @@ func (a *AuthClient) token(ctx context.Context, form url.Values) (Tokens, error)
 	}, nil
 }
 
+// TokenError is a refusal from the token endpoint, with its status and code. It
+// wraps the sentinel the refusal means (ErrSignedOut, ErrTenantDenied and the
+// rest), so errors.Is still finds it, and keeps the status for a caller that
+// answers by it.
+type TokenError struct {
+	Status int
+	Code   string
+	err    error
+}
+
+func (e *TokenError) Error() string { return e.err.Error() }
+func (e *TokenError) Unwrap() error { return e.err }
+
 func tokenError(status int, data []byte) error {
+	var body struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(data, &body)
+	return &TokenError{Status: status, Code: body.Error, err: tokenSentinel(status, data)}
+}
+
+func tokenSentinel(status int, data []byte) error {
 	var body struct {
 		Error       string `json:"error"`
 		Description string `json:"error_description"`
