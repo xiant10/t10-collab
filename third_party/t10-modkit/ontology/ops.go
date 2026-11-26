@@ -95,7 +95,9 @@ func SplitRef(ref string) (module, objectType, id string, ok bool) {
 	return parts[0], parts[1], parts[2], true
 }
 
-func (r *Registry[C]) ref(objectType, id string) string { return r.opts.Module + ":" + objectType + ":" + id }
+func (r *Registry[C]) ref(objectType, id string) string {
+	return r.opts.Module + ":" + objectType + ":" + id
+}
 
 func (r *Registry[C]) objectType(name string) (*objectEntry[C], *Error) {
 	t, ok := r.types[name]
@@ -129,6 +131,24 @@ func (r *Registry[C]) state(ctx context.Context, c C, name string, a *actionEntr
 	return ActionState{Action: name, Allowed: true}
 }
 
+// maskTitle is a title as an agent sees it: masked when its property is sensitive,
+// such as a person's name.
+func maskTitle(title string, p Property) string {
+	if p.Sensitivity != "" && title != "" {
+		return Masked
+	}
+	return title
+}
+
+// asError is a module's error as the contract's, through the module's own Errors.
+func (r *Registry[C]) asError(err error) *Error {
+	var e *Error
+	if err != nil && !errors.As(err, &e) && r.opts.Errors != nil {
+		err = r.opts.Errors(err)
+	}
+	return asError(err)
+}
+
 // mask replaces every sensitive value with Masked, for an agent.
 func mask(values map[string]any, props map[string]Property) map[string]any {
 	out := make(map[string]any, len(values))
@@ -148,16 +168,19 @@ func (r *Registry[C]) answer(ctx context.Context, c C, d Descriptor, objectType 
 	if props == nil {
 		props = map[string]any{}
 	}
+	title := o.Title
 	if IsAgent(ctx) {
-		props = mask(props, d.Properties(objectType))
+		all := d.Properties(objectType)
+		props = mask(props, all)
+		title = maskTitle(title, all[t.info.Title])
 	}
-	return ObjectAnswer{Ref: r.ref(objectType, o.ID), Type: objectType, Title: o.Title, Revision: o.Revision, Properties: props, Actions: r.states(ctx, c, objectType, rec)}
+	return ObjectAnswer{Ref: r.ref(objectType, o.ID), Type: objectType, Title: title, Revision: o.Revision, Properties: props, Actions: r.states(ctx, c, objectType, rec)}
 }
 
 func (r *Registry[C]) describe(ctx context.Context, c C) (Descriptor, *Error) {
 	d, err := r.Describe(ctx, c)
 	if err != nil {
-		return Descriptor{}, asError(err)
+		return Descriptor{}, r.asError(err)
 	}
 	return d, nil
 }
@@ -178,13 +201,13 @@ func (r *Registry[C]) GetObject(ctx context.Context, c C, objectType, id, source
 	}
 	rec, err := t.get(ctx, c, id)
 	if err != nil {
-		return ObjectAnswer{}, asError(err)
+		return ObjectAnswer{}, r.asError(err)
 	}
 	out := r.answer(ctx, c, d, objectType, rec)
 	if sources != "" {
 		refs, err := t.sources(ctx, c, rec, sources)
 		if err != nil {
-			return ObjectAnswer{}, asError(err)
+			return ObjectAnswer{}, r.asError(err)
 		}
 		out.Sources = map[string][]string{sources: nonNil(refs)}
 	}
@@ -208,7 +231,7 @@ func (r *Registry[C]) Search(ctx context.Context, c C, objectType string, body [
 	}
 	rows, err := t.search(ctx, c, q)
 	if err != nil {
-		return SearchAnswer{}, asError(err)
+		return SearchAnswer{}, r.asError(err)
 	}
 	out := SearchAnswer{Objects: []ObjectAnswer{}}
 	more := len(rows) > q.Limit
@@ -265,11 +288,11 @@ func (r *Registry[C]) Follow(ctx context.Context, c C, objectType, id, link stri
 	}
 	rec, err := t.get(ctx, c, id)
 	if err != nil {
-		return SearchAnswer{}, asError(err)
+		return SearchAnswer{}, r.asError(err)
 	}
 	rows, err := t.follow(ctx, c, rec, link, p)
 	if err != nil {
-		return SearchAnswer{}, asError(err)
+		return SearchAnswer{}, r.asError(err)
 	}
 	more := len(rows) > limit
 	if more {
@@ -288,11 +311,11 @@ func (r *Registry[C]) Follow(ctx context.Context, c C, objectType, id, link stri
 			continue
 		}
 		linked, err := r.types[target].get(ctx, c, row.ID)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		}
 		if err != nil {
-			return SearchAnswer{}, asError(err)
+			if e := r.asError(err); !errors.Is(e, ErrNotFound) {
+				return SearchAnswer{}, e
+			}
+			continue
 		}
 		o := r.answer(ctx, c, d, target, linked)
 		o.Link = values
@@ -316,6 +339,10 @@ func (r *Registry[C]) Resolve(ctx context.Context, c C, refs []string) ([]Resolv
 		return nil, invalid("resolve takes at most %d references", MaxLimit)
 	}
 	out := []Resolved{}
+	d, e := r.describe(ctx, c)
+	if e != nil {
+		return nil, e
+	}
 	for _, ref := range refs {
 		module, objectType, id, ok := SplitRef(ref)
 		t, known := r.types[objectType]
@@ -323,13 +350,16 @@ func (r *Registry[C]) Resolve(ctx context.Context, c C, refs []string) ([]Resolv
 			continue
 		}
 		rec, err := t.get(ctx, c, id)
-		if errors.Is(err, ErrNotFound) {
+		if err != nil {
+			if e := r.asError(err); !errors.Is(e, ErrNotFound) {
+				return nil, e
+			}
 			continue
 		}
-		if err != nil {
-			return nil, asError(err)
-		}
 		o := t.view(ctx, c, rec)
+		if IsAgent(ctx) {
+			o.Title = maskTitle(o.Title, d.Properties(objectType)[t.info.Title])
+		}
 		out = append(out, Resolved{Ref: ref, Type: objectType, Title: o.Title, Actions: r.states(ctx, c, objectType, rec)})
 	}
 	return out, nil
@@ -359,12 +389,16 @@ func (r *Registry[C]) prepare(ctx context.Context, c C, name string, req ActionR
 		}
 		rec, err := r.types[objectType].get(ctx, c, id)
 		if err != nil {
-			return nil, nil, asError(err)
+			return nil, nil, r.asError(err)
 		}
 		p.rec = rec
 		p.current = r.types[objectType].view(ctx, c, rec).Revision
 	} else if req.Object != "" {
 		return nil, nil, invalid("%s creates an object, so it takes no object", name)
+	}
+	// A stale revision is told first: the caller re-reads before anything else.
+	if a.info.On != "" && req.Revision != 0 && req.Revision != p.current {
+		return p, []FieldError{{Code: ErrStaleRevision.Code}}, nil
 	}
 	if s := r.state(ctx, c, name, a, p.rec); !s.Allowed {
 		return p, []FieldError{{Code: s.Reason}}, nil
@@ -376,11 +410,8 @@ func (r *Registry[C]) prepare(ctx context.Context, c C, name string, req ActionR
 	params, errs := decodeParams(req.Params, d.Params(name))
 	p.params = params
 	if a.info.On != "" {
-		switch {
-		case req.Revision == 0 && needRevision:
+		if req.Revision == 0 && needRevision {
 			errs = append(errs, FieldError{Param: "revision", Code: "required"})
-		case req.Revision != 0 && req.Revision != p.current:
-			return p, []FieldError{{Code: ErrStaleRevision.Code}}, nil
 		}
 	}
 	if len(errs) == 0 && a.validate != nil {
@@ -429,7 +460,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	if ok && a.info.Idempotent {
 		kept, found, err := r.opts.Undo.GetReplay(ctx, who.Tenant, who.User, name, in.IdempotencyKey)
 		if err != nil {
-			return ApplyAnswer{}, asError(err)
+			return ApplyAnswer{}, r.asError(err)
 		}
 		if found {
 			return r.replay(ctx, c, name, req, kept)
@@ -446,7 +477,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	hash := requestHash(name, req, p.params)
 	res, err := p.action.apply(ctx, c, p.rec, in)
 	if err != nil {
-		return ApplyAnswer{}, asError(err)
+		return ApplyAnswer{}, r.asError(err)
 	}
 	if res.Type == "" {
 		res.Type = a.info.On
@@ -462,13 +493,13 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	if a.info.Undo {
 		payload, err := json.Marshal(res.Undo)
 		if err != nil {
-			return ApplyAnswer{}, asError(err)
+			return ApplyAnswer{}, r.asError(err)
 		}
 		now := r.opts.Now()
 		entry := UndoEntry{ID: ids.New("undo"), Tenant: who.Tenant, User: who.User, Action: name, Object: r.ref(res.Type, res.ID),
 			Payload: payload, CreatedAt: now, ExpiresAt: now.Add(a.window)}
 		if err := r.opts.Undo.SaveUndo(ctx, entry); err != nil {
-			return ApplyAnswer{}, asError(err)
+			return ApplyAnswer{}, r.asError(err)
 		}
 		out.Undo = &UndoRef{ID: entry.ID, ExpiresAt: entry.ExpiresAt}
 	}
@@ -476,7 +507,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 		encoded, _ := json.Marshal(out)
 		kept, err := r.opts.Undo.SaveReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: name, Key: in.IdempotencyKey, Hash: hash, Answer: encoded})
 		if err != nil {
-			return ApplyAnswer{}, asError(err)
+			return ApplyAnswer{}, r.asError(err)
 		}
 		if kept.Hash != hash || string(kept.Answer) != string(encoded) {
 			return r.replay(ctx, c, name, req, kept)
@@ -508,7 +539,7 @@ func (r *Registry[C]) replay(ctx context.Context, c C, name string, req ActionRe
 	}
 	var out ApplyAnswer
 	if err := json.Unmarshal(kept.Answer, &out); err != nil {
-		return ApplyAnswer{}, asError(err)
+		return ApplyAnswer{}, r.asError(err)
 	}
 	return out, nil
 }
@@ -534,12 +565,12 @@ func (r *Registry[C]) Undo(ctx context.Context, c C, id string) (ApplyAnswer, er
 		return ApplyAnswer{}, Fail(http.StatusConflict, "undo_expired", "the time to undo it has run out")
 	}
 	if err := r.opts.Undo.SetUndone(ctx, who.Tenant, id, true); err != nil {
-		return ApplyAnswer{}, asError(err)
+		return ApplyAnswer{}, r.asError(err)
 	}
 	res, err := a.revert(ctx, c, Undoing{ID: entry.ID, Object: entry.Object, Payload: entry.Payload})
 	if err != nil {
 		_ = r.opts.Undo.SetUndone(context.WithoutCancel(ctx), who.Tenant, id, false)
-		return ApplyAnswer{}, asError(err)
+		return ApplyAnswer{}, r.asError(err)
 	}
 	var out ApplyAnswer
 	_, objectType, objectID, _ := SplitRef(entry.Object)
@@ -582,7 +613,7 @@ func (r *Registry[C]) Propose(ctx context.Context, c C, agent, name string, req 
 	draft := Proposal{ID: ids.New("proposal"), Tenant: who.Tenant, User: who.User, Agent: agent, Action: name, Object: req.Object,
 		Params: params, State: "open", CreatedAt: now, ExpiresAt: now.Add(ProposalLife)}
 	if err := r.opts.Proposals.CreateProposal(ctx, draft, ProposalLimit, now); err != nil {
-		return Proposal{}, nil, asError(err)
+		return Proposal{}, nil, r.asError(err)
 	}
 	return draft, nil, nil
 }
@@ -596,7 +627,7 @@ func (r *Registry[C]) Proposals(ctx context.Context, c C) ([]ProposalAnswer, err
 	who := r.opts.Who(c)
 	list, err := r.opts.Proposals.OpenProposals(ctx, who.Tenant, who.User, r.opts.Now())
 	if err != nil {
-		return nil, asError(err)
+		return nil, r.asError(err)
 	}
 	for _, p := range list {
 		out = append(out, ProposalAnswer{ID: p.ID, Action: p.Action, Object: p.Object, Params: p.Params, Agent: p.Agent, CreatedAt: p.CreatedAt, ExpiresAt: p.ExpiresAt})
@@ -618,7 +649,7 @@ func (r *Registry[C]) openProposal(ctx context.Context, c C, id string) (Proposa
 	who := r.opts.Who(c)
 	p, err := r.opts.Proposals.GetProposal(ctx, who.Tenant, who.User, id)
 	if err != nil {
-		return Proposal{}, asError(err)
+		return Proposal{}, r.asError(err)
 	}
 	if p.State != "open" {
 		return Proposal{}, ErrProposalClosed
@@ -653,14 +684,14 @@ func (r *Registry[C]) Confirm(ctx context.Context, c C, id string, body ConfirmR
 		if t, ok := r.types[objectType]; ok {
 			rec, err := t.get(ctx, c, objectID)
 			if err != nil {
-				return ApplyAnswer{}, asError(err)
+				return ApplyAnswer{}, r.asError(err)
 			}
 			req.Revision = t.view(ctx, c, rec).Revision
 		}
 	}
 	who := r.opts.Who(c)
 	if err := r.opts.Proposals.DecideProposal(ctx, who.Tenant, who.User, id, "open", "confirmed"); err != nil {
-		return ApplyAnswer{}, asError(err)
+		return ApplyAnswer{}, r.asError(err)
 	}
 	out, err := r.Apply(ctx, c, p.Action, req, Input{Via: "proposal", Agent: p.Agent, ProposalID: p.ID, IdempotencyKey: "proposal:" + p.ID})
 	if err != nil {
