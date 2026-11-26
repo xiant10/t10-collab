@@ -39,3 +39,20 @@ func (s *sealer) open(sealed []byte, purpose string) ([]byte, error) {
 	nonce, body := sealed[:s.aead.NonceSize()], sealed[s.aead.NonceSize():]
 	return s.aead.Open(nil, nonce, body, []byte(purpose))
 }
+
+// Sealer is the same sealing for a caller with its own store, such as a module
+// that keeps its session in a cookie: AES-256-GCM, the nonce first, with the
+// purpose as additional data so a value can't be moved to another use.
+type Sealer struct{ s *sealer }
+
+// NewSealer takes a 32-byte key.
+func NewSealer(key []byte) (Sealer, error) {
+	s, err := newSealer(key)
+	return Sealer{s: s}, err
+}
+
+// Seal encrypts plain for one purpose.
+func (s Sealer) Seal(plain []byte, purpose string) []byte { return s.s.seal(plain, purpose) }
+
+// Open decrypts what Seal made for the same purpose.
+func (s Sealer) Open(sealed []byte, purpose string) ([]byte, error) { return s.s.open(sealed, purpose) }
