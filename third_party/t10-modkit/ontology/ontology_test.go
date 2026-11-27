@@ -11,11 +11,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/xiant10/t10-modkit/ontology"
 	"github.com/xiant10/t10-modkit/ontology/testdata/ledgermod"
+	"github.com/xiant10/t10-modkit/ontology/undo"
 )
 
 // A made-up company's pack, version 3, and another tenant's.
@@ -314,6 +316,17 @@ func TestCheckRefusesBrokenCores(t *testing.T) {
 					return ontology.Result{}, nil
 				}})
 		}, "isn't thing's"},
+		"a sensitive default sort": {func(r *ontology.Registry[string]) {
+			who := thingType()
+			who.Name, who.Properties = "who", map[string]ontology.Property{"name": {Type: ontology.String}, "phone": {Type: ontology.String, Sensitivity: ontology.Contact}}
+			who.DefaultSort = ontology.Sort{Property: "phone"}
+			ontology.AddObject(r, who)
+		}, `who: its default sort "phone" is sensitive`},
+		"an undeclared default sort": {func(r *ontology.Registry[string]) {
+			who := thingType()
+			who.Name, who.DefaultSort = "who", ontology.Sort{Property: "age"}
+			ontology.AddObject(r, who)
+		}, `who: its default sort "age" isn't one of its properties`},
 	}
 	for name, tc := range cases {
 		reg := base()
@@ -573,6 +586,119 @@ func TestIdempotentReplay(t *testing.T) {
 	}
 	body["params"] = map[string]any{"kind": "拜访", "summary": "something else"}
 	w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), body, "Idempotency-Key", "same-key").want(t, 409, "idempotency_conflict")
+}
+
+// Retries that arrive together, as an agent's do after a timeout, apply the
+// action once: the others answer its result or request_in_progress.
+func TestIdempotentConcurrentRetries(t *testing.T) {
+	w := newWorld(t)
+	ref := dealRef(w.deal)
+	body := map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "met them"}}
+	answers := make([]answer, 12)
+	var wg sync.WaitGroup
+	for i := range answers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			answers[i] = w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), body, "Idempotency-Key", "retry-key")
+		}()
+	}
+	wg.Wait()
+	undoIDs := map[any]bool{}
+	for _, a := range answers {
+		switch {
+		case a.status == 200:
+			undoIDs[get(a.body, "undo", "id")] = true
+		case a.status == 409 && a.body["error"] == "request_in_progress":
+		default:
+			t.Errorf("a retry: %d %s", a.status, a.raw)
+		}
+	}
+	if n := len(w.m.Records()); n != 1 || len(undoIDs) != 1 {
+		t.Fatalf("want one record and one undo ID, have %d records and %v", n, undoIDs)
+	}
+	// Once it has answered, a retry gets that answer.
+	w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), body, "Idempotency-Key", "retry-key").want(t, 200, "")
+}
+
+// The registry itself runs an idempotent action once per key, also for a
+// module that doesn't check keys of its own, and gives the key back when the
+// action fails before changing anything.
+func TestIdempotentKeyRunsOnce(t *testing.T) {
+	var runs atomic.Int32
+	failing := atomic.Bool{}
+	reg := ontology.New(ontology.Options[string]{Module: "x", Prefix: "x", Version: 1, Undo: &undo.Memory{},
+		Authenticate: func(*http.Request) (string, ontology.Token, error) { return "", 0, nil },
+		Who:          func(string) ontology.Who { return ontology.Who{Tenant: "t1", User: "u1"} }, Can: func(string, string) bool { return true }})
+	ontology.AddObject(reg, thingType())
+	ontology.AddAction(reg, ontology.ActionType[string, struct{}]{Name: "thing.make", Label: "Make", LabelZh: "做", Permission: "x:make", Idempotent: true, Agent: ontology.Never,
+		Apply: func(context.Context, string, struct{}, ontology.Input) (ontology.Result, error) {
+			if failing.Load() {
+				return ontology.Result{}, ontology.ErrWrongState
+			}
+			runs.Add(1)
+			time.Sleep(20 * time.Millisecond)
+			return ontology.Result{}, nil
+		}})
+	if err := reg.Check(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := reg.Apply(ctx, "u1", "thing.make", ontology.ActionRequest{}, ontology.Input{IdempotencyKey: "k1"})
+			if err != nil && !errors.Is(err, ontology.ErrRequestInProgress) {
+				t.Errorf("a retry: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("the action ran %d times for one key", n)
+	}
+	// A failed apply frees its key, so the retry runs.
+	failing.Store(true)
+	if _, err := reg.Apply(ctx, "u1", "thing.make", ontology.ActionRequest{}, ontology.Input{IdempotencyKey: "k2"}); !errors.Is(err, ontology.ErrWrongState) {
+		t.Fatalf("a failing apply: %v", err)
+	}
+	failing.Store(false)
+	if _, err := reg.Apply(ctx, "u1", "thing.make", ontology.ActionRequest{}, ontology.Input{IdempotencyKey: "k2"}); err != nil || runs.Load() != 2 {
+		t.Fatalf("the retry after a failure: %v, %d runs", err, runs.Load())
+	}
+}
+
+// When the descriptor can't be read after the change, apply leaves the object
+// out instead of answering it unmasked.
+func TestApplyLeavesOutTheObjectWithoutADescriptor(t *testing.T) {
+	var down atomic.Bool
+	reg := ontology.New(ontology.Options[string]{Module: "x", Prefix: "x", Version: 1,
+		Authenticate: func(*http.Request) (string, ontology.Token, error) { return "", 0, nil },
+		Who:          func(string) ontology.Who { return ontology.Who{Tenant: "t1", User: "u1"} }, Can: func(string, string) bool { return true },
+		Tenant: func(context.Context, string) (ontology.Tenant, error) {
+			if down.Load() {
+				return ontology.Tenant{}, errors.New("tenant settings unavailable")
+			}
+			return ontology.Tenant{}, nil
+		}})
+	thing := thingType()
+	thing.Properties = map[string]ontology.Property{"name": {Type: ontology.String, Sensitivity: ontology.Identity}}
+	thing.Get = func(_ context.Context, _ string, id string) (string, error) { return id, nil }
+	ontology.AddObject(reg, thing)
+	ontology.AddAction(reg, ontology.ActionType[string, string]{Name: "thing.touch", Label: "Touch", LabelZh: "碰", On: "thing", Permission: "x:touch", Agent: ontology.Never,
+		Apply: func(context.Context, string, string, ontology.Input) (ontology.Result, error) {
+			down.Store(true)
+			return ontology.Result{ID: "t1"}, nil
+		}})
+	if err := reg.Check(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := reg.Apply(context.Background(), "u1", "thing.touch", ontology.ActionRequest{Object: "x:thing:t1", Revision: 1}, ontology.Input{})
+	if err != nil || out.Object != nil {
+		t.Fatalf("want the change answered with no object: %+v %v", out, err)
+	}
 }
 
 func TestUndo(t *testing.T) {

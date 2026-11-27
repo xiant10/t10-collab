@@ -53,6 +53,7 @@ var (
 	ErrTooManyProposals   = Fail(http.StatusConflict, "too_many_proposals", "there are too many drafts waiting; confirm or dismiss some first")
 	ErrProposalClosed     = Fail(http.StatusConflict, "proposal_closed", "")
 	ErrUndone             = Fail(http.StatusConflict, "undone", "it was already undone")
+	ErrRequestInProgress  = Fail(http.StatusConflict, "request_in_progress", "another request with this key is running or stopped before it answered; check the result, or use a new key")
 	ErrPersonTokenNeeded  = Fail(http.StatusUnauthorized, "person_token_required", "this route takes a person's own token")
 	ErrNotAllowedForAgent = Fail(http.StatusForbidden, "not_allowed_for_agents", "")
 	errUnavailable        = Fail(http.StatusInternalServerError, "unavailable", "")

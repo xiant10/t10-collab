@@ -107,16 +107,36 @@ func (m *Memory) GetReplay(_ context.Context, tenant, user, action, key string) 
 	return r, ok, nil
 }
 
-func (m *Memory) SaveReplay(_ context.Context, r ontology.Replay) (ontology.Replay, error) {
+func (m *Memory) ReserveReplay(_ context.Context, r ontology.Replay) (ontology.Replay, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.init()
 	k := replayKey(r.Tenant, r.User, r.Action, r.Key)
 	if kept, ok := m.replays[k]; ok {
-		return kept, nil
+		return kept, false, nil
 	}
+	r.Answer = nil
 	m.replays[k] = r
-	return r, nil
+	return r, true, nil
+}
+
+func (m *Memory) FinishReplay(_ context.Context, r ontology.Replay) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.init()
+	m.replays[replayKey(r.Tenant, r.User, r.Action, r.Key)] = r
+	return nil
+}
+
+func (m *Memory) ReleaseReplay(_ context.Context, tenant, user, action, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.init()
+	k := replayKey(tenant, user, action, key)
+	if kept, ok := m.replays[k]; ok && kept.Answer == nil {
+		delete(m.replays, k)
+	}
+	return nil
 }
 
 // Postgres keeps entries in the module's schema, after Migrations ran.
@@ -177,11 +197,32 @@ func (s Postgres) GetReplay(ctx context.Context, tenant, user, action, key strin
 	return r, err == nil, err
 }
 
-func (s Postgres) SaveReplay(ctx context.Context, r ontology.Replay) (ontology.Replay, error) {
-	if _, err := s.Pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.ontology_replays (tenant_id,user_id,action,key,hash,answer) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, s.Schema),
-		r.Tenant, r.User, r.Action, r.Key, r.Hash, string(r.Answer)); err != nil {
-		return ontology.Replay{}, err
+func (s Postgres) ReserveReplay(ctx context.Context, r ontology.Replay) (ontology.Replay, bool, error) {
+	tag, err := s.Pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.ontology_replays (tenant_id,user_id,action,key,hash) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, s.Schema),
+		r.Tenant, r.User, r.Action, r.Key, r.Hash)
+	if err != nil {
+		return ontology.Replay{}, false, err
 	}
-	kept, _, err := s.GetReplay(ctx, r.Tenant, r.User, r.Action, r.Key)
-	return kept, err
+	if tag.RowsAffected() == 1 {
+		r.Answer = nil
+		return r, true, nil
+	}
+	kept, found, err := s.GetReplay(ctx, r.Tenant, r.User, r.Action, r.Key)
+	if err == nil && !found {
+		// Released between the insert and the read: claim it again.
+		return s.ReserveReplay(ctx, r)
+	}
+	return kept, false, err
+}
+
+func (s Postgres) FinishReplay(ctx context.Context, r ontology.Replay) error {
+	_, err := s.Pool.Exec(ctx, fmt.Sprintf(`UPDATE %s.ontology_replays SET answer=$5 WHERE tenant_id=$1 AND user_id=$2 AND action=$3 AND key=$4`, s.Schema),
+		r.Tenant, r.User, r.Action, r.Key, string(r.Answer))
+	return err
+}
+
+func (s Postgres) ReleaseReplay(ctx context.Context, tenant, user, action, key string) error {
+	_, err := s.Pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.ontology_replays WHERE tenant_id=$1 AND user_id=$2 AND action=$3 AND key=$4 AND answer IS NULL`, s.Schema),
+		tenant, user, action, key)
+	return err
 }

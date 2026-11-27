@@ -223,6 +223,15 @@ func AddObject[C, R any](reg *Registry[C], t ObjectType[C, R]) {
 	if len(t.Links) > 0 && t.Follow == nil {
 		reg.fail("%s: declares links but no Follow", t.Name)
 	}
+	// A page's cursor carries the last object's sort value, so a default sort
+	// on a sensitive property would hand its values to an agent.
+	if s := t.DefaultSort.Property; s != "" {
+		if p, ok := t.Properties[s]; !ok {
+			reg.fail("%s: its default sort %q isn't one of its properties", t.Name, s)
+		} else if p.Sensitivity != "" {
+			reg.fail("%s: its default sort %q is sensitive, and a page's cursor carries its value", t.Name, s)
+		}
+	}
 	for name, p := range t.Properties {
 		if p.Sources && t.Sources == nil {
 			reg.fail("%s.%s: has sources but the type has no Sources", t.Name, name)

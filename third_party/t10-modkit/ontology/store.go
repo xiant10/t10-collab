@@ -58,7 +58,8 @@ type UndoEntry struct {
 type Replay struct {
 	Tenant, User, Action, Key string
 	// Hash is the request body's, so the same key with another body is refused.
-	Hash   string
+	Hash string
+	// Answer is nil while the request that reserved the key is still running.
 	Answer json.RawMessage
 }
 
@@ -71,9 +72,15 @@ type UndoStore interface {
 	// SetUndone marks an entry undone or not, and answers ErrUndone when
 	// marking one that already is.
 	SetUndone(ctx context.Context, tenant, id string, undone bool) error
-	// GetReplay is the answer kept under a key, and whether there is one.
+	// GetReplay is what is kept under a key, and whether there is anything.
 	GetReplay(ctx context.Context, tenant, user, action, key string) (Replay, bool, error)
-	// SaveReplay keeps an answer, and answers the one already kept when
-	// another request saved the key first.
-	SaveReplay(ctx context.Context, r Replay) (Replay, error)
+	// ReserveReplay claims a key, with r.Hash and no answer, before the action
+	// runs, so two requests with one key never both run it. When another
+	// request holds the key it answers what that one keeps, and false.
+	ReserveReplay(ctx context.Context, r Replay) (Replay, bool, error)
+	// FinishReplay keeps the answer under a key this request reserved.
+	FinishReplay(ctx context.Context, r Replay) error
+	// ReleaseReplay frees a key whose action failed before changing anything,
+	// so a retry runs it. A key with an answer is kept.
+	ReleaseReplay(ctx context.Context, tenant, user, action, key string) error
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,14 +75,34 @@ func exercise(t *testing.T, s ontology.UndoStore) {
 	if _, found, err := s.GetReplay(ctx, "t1", "u1", "record.add", "k1"); found || err != nil {
 		t.Fatalf("no replay yet: %v %v", found, err)
 	}
-	first := ontology.Replay{Tenant: "t1", User: "u1", Action: "record.add", Key: "k1", Hash: "h1", Answer: []byte(`{"undo":{"id":"undo_1"}}`)}
-	if kept, err := s.SaveReplay(ctx, first); err != nil || kept.Hash != "h1" {
-		t.Fatalf("save: %+v %v", kept, err)
+	first := ontology.Replay{Tenant: "t1", User: "u1", Action: "record.add", Key: "k1", Hash: "h1"}
+	if _, reserved, err := s.ReserveReplay(ctx, first); err != nil || !reserved {
+		t.Fatalf("reserve: %v %v", reserved, err)
 	}
-	// The first answer saved under a key is the one kept.
-	kept, err := s.SaveReplay(ctx, ontology.Replay{Tenant: "t1", User: "u1", Action: "record.add", Key: "k1", Hash: "h2", Answer: []byte(`{}`)})
-	if err != nil || kept.Hash != "h1" {
-		t.Fatalf("second save: %+v %v", kept, err)
+	// While the first request runs, the key is held, with no answer.
+	kept, reserved, err := s.ReserveReplay(ctx, ontology.Replay{Tenant: "t1", User: "u1", Action: "record.add", Key: "k1", Hash: "h2"})
+	if err != nil || reserved || kept.Hash != "h1" || kept.Answer != nil {
+		t.Fatalf("a second reserve: %+v %v %v", kept, reserved, err)
+	}
+	// A request that changed nothing gives its key back.
+	if err := s.ReleaseReplay(ctx, "t1", "u1", "record.add", "k1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := s.GetReplay(ctx, "t1", "u1", "record.add", "k1"); found {
+		t.Fatal("a released key is still held")
+	}
+	if _, reserved, _ := s.ReserveReplay(ctx, first); !reserved {
+		t.Fatal("a released key can't be reserved again")
+	}
+	first.Answer = []byte(`{"undo":{"id":"undo_1"}}`)
+	if err := s.FinishReplay(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	// A finished key keeps its answer, and isn't released.
+	_ = s.ReleaseReplay(ctx, "t1", "u1", "record.add", "k1")
+	kept, found, err := s.GetReplay(ctx, "t1", "u1", "record.add", "k1")
+	if err != nil || !found || kept.Hash != "h1" || !strings.Contains(string(kept.Answer), "undo_1") {
+		t.Fatalf("the finished answer: %+v %v %v", kept, found, err)
 	}
 	// Keys are per person.
 	if _, found, _ := s.GetReplay(ctx, "t1", "u2", "record.add", "k1"); found {

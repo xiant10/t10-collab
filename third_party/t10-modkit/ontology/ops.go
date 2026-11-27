@@ -475,21 +475,31 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	}
 	in.Params, in.Revision = p.params, req.Revision
 	hash := requestHash(name, req, p.params)
+	// The key is claimed before the action runs, so a retry that arrives while
+	// this one is still running can't apply it a second time.
+	if a.info.Idempotent {
+		kept, reserved, err := r.opts.Undo.ReserveReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: name, Key: in.IdempotencyKey, Hash: hash})
+		if err != nil {
+			return ApplyAnswer{}, r.asError(err)
+		}
+		if !reserved {
+			return r.replay(ctx, c, name, req, kept)
+		}
+	}
 	res, err := p.action.apply(ctx, c, p.rec, in)
 	if err != nil {
+		// Nothing changed, so the key is free for a retry.
+		if a.info.Idempotent {
+			_ = r.opts.Undo.ReleaseReplay(context.WithoutCancel(ctx), who.Tenant, who.User, name, in.IdempotencyKey)
+		}
 		return ApplyAnswer{}, r.asError(err)
 	}
+	// From here the change is made: a failure keeps the key claimed, and a
+	// retry with it answers request_in_progress instead of applying again.
 	if res.Type == "" {
 		res.Type = a.info.On
 	}
-	var out ApplyAnswer
-	if t, ok := r.types[res.Type]; ok && res.ID != "" {
-		if rec, err := t.get(ctx, c, res.ID); err == nil {
-			d, _ := r.Describe(ctx, c)
-			o := r.answer(ctx, c, d, res.Type, rec)
-			out.Object = &o
-		}
-	}
+	out := ApplyAnswer{Object: r.changed(ctx, c, res.Type, res.ID)}
 	if a.info.Undo {
 		payload, err := json.Marshal(res.Undo)
 		if err != nil {
@@ -505,15 +515,31 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	}
 	if a.info.Idempotent {
 		encoded, _ := json.Marshal(out)
-		kept, err := r.opts.Undo.SaveReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: name, Key: in.IdempotencyKey, Hash: hash, Answer: encoded})
-		if err != nil {
+		if err := r.opts.Undo.FinishReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: name, Key: in.IdempotencyKey, Hash: hash, Answer: encoded}); err != nil {
 			return ApplyAnswer{}, r.asError(err)
-		}
-		if kept.Hash != hash || string(kept.Answer) != string(encoded) {
-			return r.replay(ctx, c, name, req, kept)
 		}
 	}
 	return out, nil
+}
+
+// changed is the object an apply or undo answers, read again. It is left out
+// when the read or the descriptor fails: without the descriptor an agent's
+// answer couldn't be masked, and the change is made either way.
+func (r *Registry[C]) changed(ctx context.Context, c C, objectType, id string) *ObjectAnswer {
+	t, ok := r.types[objectType]
+	if !ok || id == "" {
+		return nil
+	}
+	rec, err := t.get(ctx, c, id)
+	if err != nil {
+		return nil
+	}
+	d, err := r.Describe(ctx, c)
+	if err != nil {
+		return nil
+	}
+	o := r.answer(ctx, c, d, objectType, rec)
+	return &o
 }
 
 // replay answers a kept answer after checking the person's current rights
@@ -536,6 +562,9 @@ func (r *Registry[C]) replay(ctx context.Context, c C, name string, req ActionRe
 	params, _ := decodeParams(req.Params, d.Params(name))
 	if requestHash(name, req, params) != kept.Hash {
 		return ApplyAnswer{}, Fail(http.StatusConflict, "idempotency_conflict", "this key was used with another body")
+	}
+	if kept.Answer == nil {
+		return ApplyAnswer{}, ErrRequestInProgress
 	}
 	var out ApplyAnswer
 	if err := json.Unmarshal(kept.Answer, &out); err != nil {
@@ -572,19 +601,11 @@ func (r *Registry[C]) Undo(ctx context.Context, c C, id string) (ApplyAnswer, er
 		_ = r.opts.Undo.SetUndone(context.WithoutCancel(ctx), who.Tenant, id, false)
 		return ApplyAnswer{}, r.asError(err)
 	}
-	var out ApplyAnswer
 	_, objectType, objectID, _ := SplitRef(entry.Object)
 	if res.Type != "" {
 		objectType, objectID = res.Type, res.ID
 	}
-	if t, ok := r.types[objectType]; ok {
-		if rec, err := t.get(ctx, c, objectID); err == nil {
-			d, _ := r.Describe(ctx, c)
-			o := r.answer(ctx, c, d, objectType, rec)
-			out.Object = &o
-		}
-	}
-	return out, nil
+	return ApplyAnswer{Object: r.changed(ctx, c, objectType, objectID)}, nil
 }
 
 // Propose stores a draft for the person an agent acts for, when the action's
