@@ -18,7 +18,7 @@ Every read applies collab's one access policy (`internal/policy`) in SQL before 
 
 | Type | Reads for | Holds |
 | --- | --- | --- |
-| `work_item` | Its creator, owners, collaborators, the recipient of a pending offer, members of its list, and a manager of an owner as the tenant's manager visibility allows. An item of a `participants` type reads only for its creator, owners and pending recipient | `title`, `description`, `status`, `priority`, `deadline`, `type`, `state`, `list`, `subject`, `creator`, `created_at`, `updated_at`; and for the caller `relation`, `pending_offers`, `working` and `comment_count`. Links: `owners`, `collaborators`, `comments`, `offers` |
+| `work_item` | Its creator, owners, collaborators, the recipient of a pending offer, members of its list, and a manager of an owner as the tenant's manager visibility allows. An item of a `participants` type reads only for its creator, owners and pending recipient | `title`, `description`, `status`, `priority`, `deadline`, `type`, `state`, `list`, `subject`, `creator`, `created_at`, `updated_at`; `overdue`, `due_soon`; and for the caller `relation`, `pending_offers`, `working` and `comment_count`. Links: `owners`, `collaborators`, `comments`, `offers` |
 | `list` | Its members | `name`, `archived`, `role` (the caller's), `created_at`. Links: `items`, `members` |
 | `comment` | Whoever reads its item | `body`, `author`, `item`, `created_at` |
 | `offer` | Its sender, its recipient, and the item's owners | `item`, `from`, `to`, `mode`, `note`, `state`, `created_at`, `responded_at` |
@@ -33,6 +33,8 @@ POST /v1/objects/work_item/search
                     {"property": "deadline", "op": "lt", "value": "2026-11-27T09:00:00Z"}]},
  "sort": {"property": "deadline"}, "limit": 20}
 ```
+
+`overdue` (open and past due) and `due_soon` (open and due within a day) say the same for a client that can't put the time in a filter, such as a fixed greeting variable: "my overdue tasks" is also `relation eq owner` and `overdue eq true`.
 
 `working` counts the agent teammates told about the task in the last 15 minutes that haven't acted since; it can't be filtered or sorted on. A search sorts on the core's properties, not on type fields.
 

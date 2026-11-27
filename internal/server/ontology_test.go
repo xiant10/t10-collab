@@ -192,6 +192,18 @@ func TestMyOverdueTasksPage(t *testing.T) {
 	followed := h.want("bob", "POST", "/v1/work-items", map[string]any{"title": "Bob's", "due_at": past.Format(time.RFC3339)}, http.StatusCreated)["id"].(string)
 	h.want("bob", "PUT", "/v1/work-items/"+followed+"/collaborators/ada", nil, http.StatusNoContent)
 
+	// overdue says the same as a deadline before now, for a client with no clock.
+	overdue, _ := h.search("ada", "work_item", map[string]any{"filter": map[string]any{"and": []any{
+		map[string]any{"property": "relation", "op": "eq", "value": "owner"},
+		map[string]any{"property": "overdue", "op": "eq", "value": true},
+	}}})
+	if len(overdue) != len(mine) {
+		t.Errorf("overdue = %v", refs(overdue))
+	}
+	soon, _ := h.search("ada", "work_item", map[string]any{"filter": map[string]any{"property": "due_soon", "op": "eq", "value": true}})
+	if len(soon) != 0 {
+		t.Errorf("due soon = %v", refs(soon))
+	}
 	for _, sort := range []map[string]any{nil, {"property": "deadline"}, {"property": "deadline", "desc": true}, {"property": "title"}} {
 		body := map[string]any{"limit": 2, "filter": map[string]any{"and": []any{
 			map[string]any{"property": "relation", "op": "eq", "value": "owner"},
@@ -201,6 +213,11 @@ func TestMyOverdueTasksPage(t *testing.T) {
 			body["sort"] = sort
 		}
 		found, pages := h.search("ada", "work_item", body)
+		for _, o := range found {
+			if props(o)["overdue"] != true || props(o)["due_soon"] != false {
+				t.Errorf("%v isn't overdue", props(o))
+			}
+		}
 		got := refs(found)
 		slices.Sort(got)
 		want := slices.Clone(mine)

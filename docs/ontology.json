@@ -184,11 +184,23 @@
           "name": "Description",
           "name_zh": "说明"
         },
+        "due_soon": {
+          "type": "boolean",
+          "name": "Due in a day",
+          "name_zh": "一天内到期",
+          "derived": true
+        },
         "list": {
           "type": "ref",
           "name": "List",
           "name_zh": "清单",
           "to": "collab:list"
+        },
+        "overdue": {
+          "type": "boolean",
+          "name": "Overdue",
+          "name_zh": "已逾期",
+          "derived": true
         },
         "pending_offers": {
           "type": "integer",

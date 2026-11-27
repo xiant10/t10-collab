@@ -35,6 +35,9 @@ func (r item) relation() string {
 	return r.Relation.Tie()
 }
 
+// dueSoon is how far ahead due_soon looks.
+const dueSoon = 24 * time.Hour
+
 // The item's statuses and priorities, as the routes take them.
 var (
 	statuses   = []string{workitems.StatusTodo, workitems.StatusDoing, workitems.StatusDone, workitems.StatusCancelled}
@@ -61,6 +64,8 @@ func (o *Ontology) declareItems() {
 			"pending_offers": {Type: onto.Integer, Name: "Offers waiting", NameZh: "待接收", Derived: true},
 			"working":        {Type: onto.Integer, Name: "Agents working on it", NameZh: "处理中的智能体", Derived: true},
 			"comment_count":  {Type: onto.Integer, Name: "Comments", NameZh: "评论数", Derived: true},
+			"overdue":        {Type: onto.Boolean, Name: "Overdue", NameZh: "已逾期", Derived: true},
+			"due_soon":       {Type: onto.Boolean, Name: "Due in a day", NameZh: "一天内到期", Derived: true},
 			"created_at":     {Type: onto.Timestamp, Name: "Created", NameZh: "创建时间"},
 			"updated_at":     {Type: onto.Timestamp, Name: "Updated", NameZh: "更新时间"},
 		},
@@ -104,6 +109,10 @@ func (o *Ontology) declareItems() {
 				"relation": r.relation(), "pending_offers": int64(r.PendingOffers), "working": int64(r.Working),
 				"comment_count": int64(r.Comments), "created_at": r.CreatedAt, "updated_at": r.UpdatedAt,
 			}
+			now := time.Now()
+			open := r.Status == workitems.StatusTodo || r.Status == workitems.StatusDoing
+			p["overdue"] = open && r.DueAt != nil && r.DueAt.Before(now)
+			p["due_soon"] = open && r.DueAt != nil && !r.DueAt.Before(now) && r.DueAt.Before(now.Add(dueSoon))
 			if r.DueAt != nil {
 				p["deadline"] = *r.DueAt
 			}
@@ -167,8 +176,11 @@ func (o *Ontology) itemColumns(ctx context.Context, c policy.Caller) (map[string
 		"relation":       {expr: "relation", kind: onto.Enum},
 		"pending_offers": {expr: "pending_offers", kind: onto.Integer},
 		"comment_count":  {expr: "comment_count", kind: onto.Integer},
-		"created_at":     {expr: "i.created_at", kind: onto.Timestamp},
-		"updated_at":     {expr: "i.updated_at", kind: onto.Timestamp},
+		"overdue":        {expr: "(i.status IN ('todo', 'doing') AND i.due_at IS NOT NULL AND i.due_at < now())", kind: onto.Boolean, unsorted: true},
+		"due_soon": {expr: "(i.status IN ('todo', 'doing') AND i.due_at >= now() AND i.due_at < now() + interval '24 hours')",
+			kind: onto.Boolean, unsorted: true},
+		"created_at": {expr: "i.created_at", kind: onto.Timestamp},
+		"updated_at": {expr: "i.updated_at", kind: onto.Timestamp},
 	}
 	all, err := o.d.Types.List(ctx, c.TenantID)
 	if err != nil {
