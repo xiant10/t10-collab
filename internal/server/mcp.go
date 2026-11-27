@@ -35,18 +35,21 @@ var mcpVersions = []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05
 
 var errBadArguments = errors.New("the arguments don't fit this tool")
 
-// tool is one agent tool. It calls the same services as the routes, so policy
-// applies to it the same way. An assistant acting for a person reads and
-// drafts, and only the person sends, accepts or deletes. The tools marked
-// agentOnly, which send, accept, decline and claim, serve only an agent
-// teammate: a run whose principal is a tenant agent account, acting on its
-// own items under its own rights. There's no work_delete tool.
+// tool is one agent tool. An assistant acting for a person has the ontology's
+// generated tools (internal/ontology), with work_people and work_history: it
+// reads and drafts, the person confirms, and a task of the person's own it may
+// make, which they can undo. The tools marked agentOnly serve only an agent
+// teammate: a run whose principal is a tenant agent account, acting on its own
+// items under its own rights, which nobody would confirm drafts for. There's no
+// delete tool.
 type tool struct {
 	name, description string
 	action            string
 	agentOnly         bool
 	schema            map[string]any
 	run               func(ctx context.Context, c policy.Caller, args json.RawMessage) (any, error)
+	// generated runs a generated tool, which answers its MCP result itself.
+	generated func(ctx context.Context, c policy.Caller, agent string, args json.RawMessage) map[string]any
 }
 
 // args decodes a tool's arguments before run. A misnamed field is refused, since
@@ -74,30 +77,6 @@ func object(required []string, properties map[string]any) map[string]any {
 
 func text(description string) map[string]any {
 	return map[string]any{"type": "string", "description": description}
-}
-
-const (
-	dueOverdue = "overdue"
-	dueSoon    = "soon"
-)
-
-// dueFilter narrows f to overdue items, which are still open, or to items due
-// in the next 24 hours.
-func dueFilter(f *workitems.Filter, due string, now time.Time) error {
-	switch due {
-	case "":
-	case dueOverdue:
-		f.DueBefore = &now
-		if f.Status == "" {
-			f.Status = workitems.StatusOpen
-		}
-	case dueSoon:
-		until := now.Add(24 * time.Hour)
-		f.DueFrom, f.DueBefore = &now, &until
-	default:
-		return workitems.ErrInvalid
-	}
-	return nil
 }
 
 func choice(description string, values ...string) map[string]any {
@@ -128,90 +107,12 @@ type pageArgs struct {
 }
 
 func (s *Server) tools() []tool {
-	const id = "Work item ID, such as wi_ab12"
-	return []tool{
-		{
-			name:        "work_list",
-			description: "List the signed-in user's work items, which are tasks people give each other. Each has an id, title, status, owners and version.",
-			action:      policy.ActionRead,
-			schema: object(nil, paged(map[string]any{
-				"view":    choice("Which items. Leave out for all the user can see", workitems.ViewOwned, workitems.ViewSent, workitems.ViewCollaborating, workitems.ViewList, workitems.ViewReports),
-				"status":  choice("Only items in this status", workitems.StatusTodo, workitems.StatusDoing, workitems.StatusDone, workitems.StatusCancelled),
-				"list_id": text("The shared list to read, needed with view list"),
-				"due":     choice("Only items past their due date and still open (overdue), or due in the next 24 hours (soon)", dueOverdue, dueSoon),
-				"type":    text("Only items of this type, as <module>.<name>"),
-				"module":  text("Only items of this module's types, by module ID"),
-				"subject": text("Only items about this record, as <module>:<type>:<id>"),
-			})),
-			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				View    string `json:"view"`
-				Status  string `json:"status"`
-				ListID  string `json:"list_id"`
-				Due     string `json:"due"`
-				Type    string `json:"type"`
-				Module  string `json:"module"`
-				Subject string `json:"subject"`
-				pageArgs
-			}) (any, error) {
-				n, err := pageSize(a.Limit)
-				if err != nil {
-					return nil, err
-				}
-				f := workitems.Filter{
-					View: a.View, Status: a.Status, ListID: a.ListID, Cursor: a.Cursor, Limit: n,
-					Type: a.Type, Module: a.Module, Subject: a.Subject,
-				}
-				if err := dueFilter(&f, a.Due, time.Now()); err != nil {
-					return nil, err
-				}
-				items, next, err := s.Items.List(ctx, c, f)
-				return map[string]any{"items": items, "next_cursor": next}, err
-			}),
-		},
-		{
-			name:        "work_get",
-			description: "Read one work item in full. Its version is needed to update it. On a list with a workflow, workflow shows its stage, the stage's guide, and where pass and changes take it. A module's typed item has a state, and moves lists the transitions you may take now with work_transition, with what each requires.",
-			action:      policy.ActionRead,
-			schema:      object([]string{"id"}, map[string]any{"id": text(id)}),
-			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				ID string `json:"id"`
-			}) (any, error) {
-				item, relation, err := s.Items.ViewAs(ctx, c, a.ID)
-				if err != nil {
-					return nil, err
-				}
-				place, err := s.Offers.PlaceOf(ctx, c.TenantID, item)
-				if err != nil {
-					return nil, err
-				}
-				moves, err := s.Items.Moves(ctx, c, item, relation)
-				if err != nil {
-					return nil, err
-				}
-				return struct {
-					workitems.Item
-					Moves    []workitems.Move `json:"moves"`
-					Workflow *offers.Place    `json:"workflow,omitempty"`
-				}{item, moves, place}, nil
-			}),
-		},
-		{
-			name:        "work_comments",
-			description: "Read the comments on a work item, oldest first.",
-			action:      policy.ActionRead,
-			schema:      object([]string{"id"}, paged(map[string]any{"id": text(id)})),
-			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				ID string `json:"id"`
-				pageArgs
-			}) (any, error) {
-				n, err := pageSize(a.Limit)
-				if err != nil {
-					return nil, err
-				}
-				comments, next, err := s.Items.Comments(ctx, c, a.ID, a.Cursor, n)
-				return map[string]any{"comments": comments, "next_cursor": next}, err
-			}),
-		},
+	const id = "Work item ID, such as wi_ab12, or its reference, collab:work_item:wi_ab12"
+	tools := []tool{}
+	for _, g := range s.ontology.Registry().Tools() {
+		tools = append(tools, tool{name: g.Name, description: g.Description, action: g.Action, schema: g.InputSchema, generated: g.Run})
+	}
+	return append(tools, []tool{
 		{
 			name:        "work_history",
 			description: "Read what has happened to a work item, oldest first.",
@@ -233,40 +134,6 @@ func (s *Server) tools() []tool {
 			}),
 		},
 		{
-			name:        "work_offers",
-			description: "List work offered to the user that waits for an answer, or offers the user sent. Only the user can accept or decline one, in the app.",
-			action:      policy.ActionRead,
-			schema:      object([]string{"box"}, paged(map[string]any{"box": choice("Offers waiting for the user, or offers the user sent", offers.BoxInbox, offers.BoxSent)})),
-			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				Box string `json:"box"`
-				pageArgs
-			}) (any, error) {
-				n, err := pageSize(a.Limit)
-				if err != nil {
-					return nil, err
-				}
-				found, next, err := s.Offers.List(ctx, c, a.Box, a.Cursor, n)
-				return map[string]any{"offers": found, "next_cursor": next}, err
-			}),
-		},
-		{
-			name:        "work_lists",
-			description: "List the shared work lists the user belongs to.",
-			action:      policy.ActionRead,
-			schema:      object(nil, paged(map[string]any{"archived": map[string]any{"type": "boolean", "description": "List archived ones instead"}})),
-			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				Archived bool `json:"archived"`
-				pageArgs
-			}) (any, error) {
-				n, err := pageSize(a.Limit)
-				if err != nil {
-					return nil, err
-				}
-				found, next, err := s.Lists.Mine(ctx, c, a.Archived, a.Cursor, n)
-				return map[string]any{"lists": found, "next_cursor": next}, err
-			}),
-		},
-		{
 			name:        "work_people",
 			description: "Find colleagues by name with q, or turn the user IDs on a work item into names with ids.",
 			action:      policy.ActionRead,
@@ -277,21 +144,44 @@ func (s *Server) tools() []tool {
 			run: args(s.toolPeople),
 		},
 		{
+			name:        "work_workflow",
+			description: "For agent teammates only. Where a work item stands on its list's workflow: its stage, the stage's guide, and where pass and changes take it, for work_advance. For a module's typed item, the moves you may take now with work_transition, with what each requires, and its version.",
+			action:      policy.ActionRead,
+			agentOnly:   true,
+			schema:      object([]string{"id"}, map[string]any{"id": text(id)}),
+			run: args(func(ctx context.Context, c policy.Caller, a struct {
+				ID string `json:"id"`
+			}) (any, error) {
+				item, relation, err := s.Items.ViewAs(ctx, c, a.ID)
+				if err != nil {
+					return nil, err
+				}
+				place, err := s.Offers.PlaceOf(ctx, c.TenantID, item)
+				if err != nil {
+					return nil, err
+				}
+				moves, err := s.Items.Moves(ctx, c, item, relation)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"id": item.ID, "version": item.Version, "state": item.State, "moves": moves, "workflow": place}, nil
+			}),
+		},
+		{
 			name:        "work_create",
-			description: "Create a work item owned by the user. It stays with the user: nothing is sent to anyone. If it should go to someone, give suggest_to: the user then sends it with one click from the task or Home, and you tell them it's ready.",
+			description: "For agent teammates only. Create a work item that you own, such as a follow-up from your work. Send it on with work_send.",
 			action:      policy.ActionWrite,
+			agentOnly:   true,
 			schema: object([]string{"title"}, map[string]any{
-				"title":        text("A short title"),
-				"description":  text("The detail"),
-				"priority":     choice("Normal by default", "low", "normal", "high"),
-				"due_at":       text("When it's due, as an RFC 3339 time"),
-				"list_id":      text("Put it on this shared list"),
-				"unowned":      map[string]any{"type": "boolean", "description": "With list_id: leave it for any list member to claim"},
-				"suggest_to":   text("The user ID it should go to, from work_people, for the user to confirm"),
-				"suggest_note": text("With suggest_to: the note to send with it"),
-				"type":         text("A module's item type, as <module>.<name>, from work_get or the module. Leave out for a plain task"),
-				"fields":       map[string]any{"type": "object", "description": "With type: the type's field values, by key"},
-				"subject_ref":  text("The record it's about, as <module>:<type>:<id>"),
+				"title":       text("A short title"),
+				"description": text("The detail"),
+				"priority":    choice("Normal by default", "low", "normal", "high"),
+				"due_at":      text("When it's due, as an RFC 3339 time"),
+				"list_id":     text("Put it on this shared list"),
+				"unowned":     map[string]any{"type": "boolean", "description": "With list_id: leave it for any list member to claim"},
+				"type":        text("A module's item type, as <module>.<name>, from work_get or the module. Leave out for a plain task"),
+				"fields":      map[string]any{"type": "object", "description": "With type: the type's field values, by key"},
+				"subject_ref": text("The record it's about, as <module>:<type>:<id>"),
 			}),
 			run: args(func(ctx context.Context, c policy.Caller, a struct {
 				Title       string         `json:"title"`
@@ -300,8 +190,6 @@ func (s *Server) tools() []tool {
 				DueAt       *time.Time     `json:"due_at"`
 				ListID      string         `json:"list_id"`
 				Unowned     bool           `json:"unowned"`
-				SuggestTo   string         `json:"suggest_to"`
-				SuggestNote string         `json:"suggest_note"`
 				Type        string         `json:"type"`
 				Fields      map[string]any `json:"fields"`
 				SubjectRef  string         `json:"subject_ref"`
@@ -310,35 +198,17 @@ func (s *Server) tools() []tool {
 					Title: a.Title, Description: a.Description, Priority: a.Priority, DueAt: a.DueAt, ListID: a.ListID, Unowned: a.Unowned,
 					Type: a.Type, Fields: a.Fields, SubjectRef: a.SubjectRef,
 				}, nil)
-				if err == nil && a.SuggestTo == "" {
-					return s.Offers.StartNew(ctx, c, item)
-				}
 				if err != nil {
-					return item, err
+					return nil, err
 				}
-				return s.suggest(ctx, c, item, offers.Send{To: a.SuggestTo, Note: a.SuggestNote})
-			}),
-		},
-		{
-			name:        "work_suggest",
-			description: "Suggest sending one of the user's work items to someone. You can't send it yourself: the user sends it with one click from the task or Home, so tell them it's ready. A new suggestion replaces the last one.",
-			action:      policy.ActionWrite,
-			schema: object([]string{"id", "to"}, map[string]any{
-				"id": text(id), "to": text("The user ID it should go to, from work_people"),
-				"note": text("The note to send with it: why, and what's left to do"),
-			}),
-			run: args(func(ctx context.Context, c policy.Caller, a struct {
-				ID   string `json:"id"`
-				To   string `json:"to"`
-				Note string `json:"note"`
-			}) (any, error) {
-				return s.Offers.Suggest(ctx, c, a.ID, offers.Send{To: a.To, Note: a.Note})
+				return s.Offers.StartNew(ctx, c, item)
 			}),
 		},
 		{
 			name:        "work_update",
-			description: "Change a work item's fields or status. Give the version from work_get. Leave out what shouldn't change. A version_conflict means someone else changed it, so read it again.",
+			description: "For agent teammates only. Change a work item's fields or status. Give the version from work_workflow. Leave out what shouldn't change. A version_conflict means someone else changed it, so read it again.",
 			action:      policy.ActionWrite,
+			agentOnly:   true,
 			schema: object([]string{"id", "version"}, map[string]any{
 				"id":          text(id),
 				"version":     map[string]any{"type": "integer", "description": "The version last read"},
@@ -358,8 +228,9 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_comment",
-			description: "Add a comment to a work item. Everyone on the item is told, and it shows as the user's. Mention people by user ID to tell them too, if they can read the item. In the body, call people by name, never by ID.",
+			description: "For agent teammates only. Add a comment to a work item. Everyone on the item is told, and it shows as the user's. Mention people by user ID to tell them too, if they can read the item. In the body, call people by name, never by ID.",
 			action:      policy.ActionWrite,
+			agentOnly:   true,
 			schema: object([]string{"id", "body"}, map[string]any{
 				"id": text(id), "body": text("The comment. Write a mention as @ and the person's name from work_people, such as @Mei Lin. An @ followed by a user ID is shown as their name"),
 				"mentions": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20, "description": "User IDs to tell, from work_people"},
@@ -374,8 +245,9 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_link",
-			description: "Add a link to a work item, such as the pull request, commit or build where you did its work, so people can open it from the task. Use an https URL and a short title; the kind is guessed from the URL when left out. Comment what changed too.",
+			description: "For agent teammates only. Add a link to a work item, such as the pull request, commit or build where you did its work, so people can open it from the task. Use an https URL and a short title; the kind is guessed from the URL when left out. Comment what changed too.",
 			action:      policy.ActionWrite,
+			agentOnly:   true,
 			schema: object([]string{"id", "url"}, map[string]any{
 				"id": text(id), "url": text("The https URL"), "title": text("A short title, such as the pull request's; its address when left out"),
 				"kind": choice("What it points at", workitems.LinkKinds...),
@@ -408,7 +280,7 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_advance",
-			description: "For agent teammates only. Finish your stage of a work item on a workflow, as work_get's workflow shows it: pass sends it to the next stage, or marks it done after the last; changes sends it back to the stage that fixes it, with a note saying what to fix. A pass may skip a stage whose skip_when holds: give to, a stage from the workflow's skip list, and say in the note why it holds. Use it instead of work_send when the item has a stage.",
+			description: "For agent teammates only. Finish your stage of a work item on a workflow, as work_workflow shows it: pass sends it to the next stage, or marks it done after the last; changes sends it back to the stage that fixes it, with a note saying what to fix. A pass may skip a stage whose skip_when holds: give to, a stage from the workflow's skip list, and say in the note why it holds. Use it instead of work_send when the item has a stage.",
 			action:      policy.ActionSend,
 			agentOnly:   true,
 			schema: object([]string{"id", "result", "note"}, map[string]any{
@@ -428,11 +300,11 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_transition",
-			description: "For agent teammates only. Move a module's typed item to another state, by a transition from work_get's moves. Give the note and payload the move asks for: reply is your result as text, links are https URLs with titles.",
+			description: "For agent teammates only. Move a module's typed item to another state, by a transition from work_workflow's moves. Give the note and payload the move asks for: reply is your result as text, links are https URLs with titles.",
 			action:      policy.ActionWrite,
 			agentOnly:   true,
 			schema: object([]string{"id", "transition"}, map[string]any{
-				"id": text(id), "transition": text("A transition ID from work_get's moves"),
+				"id": text(id), "transition": text("A transition ID from work_workflow's moves"),
 				"note": text("Why, or what you did; required when the move says so"),
 				"payload": map[string]any{"type": "object", "description": "The move's result, as its payload allows", "properties": map[string]any{
 					"reply": text("Your result as text"),
@@ -449,7 +321,7 @@ func (s *Server) tools() []tool {
 		},
 		{
 			name:        "work_accept",
-			description: "For agent teammates only. Accept work offered to you, by its offer ID from work_offers. Accept only work your instructions say you take.",
+			description: "For agent teammates only. Accept work offered to you, by its offer, from work_search of type offer with state pending. Accept only work your instructions say you take.",
 			action:      policy.ActionSend,
 			agentOnly:   true,
 			schema:      object([]string{"offer_id"}, map[string]any{"offer_id": text("Offer ID, such as ofr_ab12")}),
@@ -486,34 +358,7 @@ func (s *Server) tools() []tool {
 				return s.Items.Claim(ctx, c, a.ID)
 			}),
 		},
-	}
-}
-
-// toolsFor are the tools a list shows. A list made with a person's token, or
-// an assistant's, leaves out the agent-only tools. One made without a token is
-// a harness's catalog for every session, which can't know whose a session is,
-// so it has every tool: calls still decide, and refuse the agent-only ones for
-// anyone but an agent account.
-// suggest adds a suggested send to an item just created. The item stays if the
-// suggestion is refused, so the model is told why rather than creating it again.
-func (s *Server) suggest(ctx context.Context, c policy.Caller, item workitems.Item, send offers.Send) (any, error) {
-	suggested, err := s.Offers.Suggest(ctx, c, item.ID, send)
-	if err != nil {
-		return map[string]any{"item": item, "suggestion_refused": err.Error()}, nil
-	}
-	return suggested, nil
-}
-
-func (s *Server) toolsFor(r *http.Request) []tool {
-	all := s.tools()
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok || raw == "" {
-		return all
-	}
-	if who, err := s.Verifier.Verify(r.Context(), raw); err == nil && who.Agent != nil && people.IsAgentID(who.UserID) {
-		return all
-	}
-	return slices.DeleteFunc(all, func(t tool) bool { return t.agentOnly })
+	}...)
 }
 
 func (s *Server) toolPeople(ctx context.Context, c policy.Caller, a struct {
@@ -572,7 +417,8 @@ func rpcError(w http.ResponseWriter, status int, id json.RawMessage, code int, m
 // stream answers GET and DELETE with 405, as the mux does.
 //
 // Listing answers without a token, because agent-pi lists once at startup with
-// no user, and the list holds nothing about any tenant. Only tools/call needs a
+// no user, and the list holds nothing about any tenant; it is the same for
+// everyone, and a call decides. Only tools/call needs a
 // token, and only a delegated one.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	// Nothing here serves a browser, and the protocol requires refusing one a
@@ -613,7 +459,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 	case "ping":
 		rpcResult(w, message.ID, map[string]any{})
 	case "tools/list":
-		tools := s.toolsFor(r)
+		tools := s.tools()
 		listed := make([]map[string]any, len(tools))
 		for i, t := range tools {
 			listed[i] = map[string]any{"name": t.name, "description": t.description, "inputSchema": t.schema}
@@ -669,7 +515,7 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, message rpcMess
 		rpcResult(w, message.ID, toolFailure("forbidden", "this agent's grant has limits this service can't apply"))
 		return
 	case t.agentOnly && !people.IsAgentID(who.UserID):
-		rpcResult(w, message.ID, toolFailure("forbidden", "an assistant drafts work and the person sends it: suggest the send with work_suggest, or suggest_to on work_create, and tell them it's ready to send"))
+		rpcResult(w, message.ID, toolFailure("forbidden", "an assistant drafts and the person confirms: draft this with work_propose, and tell them it's waiting for them to confirm"))
 		return
 	case !who.Allows(t.action):
 		rpcResult(w, message.ID, toolFailure("forbidden", "this agent isn't allowed to do this: it needs "+t.action))
@@ -678,7 +524,13 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, message rpcMess
 	ctx, end := telemetry.Continue(r.Context(), params.Meta.Traceparent, "tool "+t.name)
 	defer end()
 	caller := policy.Caller{TenantID: who.TenantID, UserID: who.UserID, GrantID: who.Agent.GrantID, GrantChain: grantIDs(who.Agent.Chain)}
-	out, err := t.run(ctx, caller, params.Arguments)
+	if t.generated != nil {
+		result := t.generated(ctx, caller, who.Agent.Runtime, params.Arguments)
+		slog.Info("tool call", "tool", t.name, "grant", who.Agent.GrantID, "ok", result["isError"] != true)
+		rpcResult(w, message.ID, result)
+		return
+	}
+	out, err := t.run(ctx, caller, plainIDs(params.Arguments))
 	slog.Info("tool call", "tool", t.name, "grant", who.Agent.GrantID, "ok", err == nil)
 	if err != nil {
 		status, code, reason := classify(err)
@@ -694,6 +546,31 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, message rpcMess
 		result = toolFailure("internal_error", "something went wrong")
 	}
 	rpcResult(w, message.ID, result)
+}
+
+// plainIDs takes a reference where a teammate's tool takes an ID, since the
+// generated tools answer references: collab:work_item:wi_1 is wi_1.
+func plainIDs(raw json.RawMessage) json.RawMessage {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return raw
+	}
+	changed := false
+	for key, prefix := range map[string]string{"id": "collab:work_item:", "offer_id": "collab:offer:"} {
+		var value string
+		if json.Unmarshal(fields[key], &value) == nil && strings.HasPrefix(value, prefix) {
+			fields[key], _ = json.Marshal(strings.TrimPrefix(value, prefix))
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // unconstrained reports that no grant sets a limit. Constraints are opaque to

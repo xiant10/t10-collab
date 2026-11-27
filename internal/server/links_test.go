@@ -54,18 +54,18 @@ func TestLinksOnAnItem(t *testing.T) {
 	}
 }
 
-// An agent adds a link with work_link, and no agent is woken by it.
+// An agent teammate adds a link with work_link, and no agent is woken by it.
 func TestAgentLinksItsWork(t *testing.T) {
 	h := newHarness(t)
-	ts := h.mcpServer()
-	created := call(t, ts.URL, "agent-write", "work_create", map[string]any{"title": "Fix export"})
+	ts := h.teammateServer()
+	created := call(t, ts.URL, "teammate:acc_lead", "work_create", map[string]any{"title": "Fix export"})
 	id := created.data["id"].(string)
-	linked := call(t, ts.URL, "agent-write", "work_link", map[string]any{"id": id, "url": "https://github.com/acme/app/pull/7", "title": "Fix export", "kind": "pull_request"})
+	linked := call(t, ts.URL, "teammate:acc_lead", "work_link", map[string]any{"id": id, "url": "https://github.com/acme/app/pull/7", "title": "Fix export", "kind": "pull_request"})
 	if linked.failed || linked.data["url"] != "https://github.com/acme/app/pull/7" {
 		t.Fatalf("work_link = %+v", linked)
 	}
-	if got := call(t, ts.URL, "agent-write", "work_get", map[string]any{"id": id}); len(got.data["links"].([]any)) != 1 {
-		t.Errorf("work_get links = %+v", got.data["links"])
+	if got := h.want("acc_lead", "GET", "/v1/work-items/"+id, nil, http.StatusOK); len(got["links"].([]any)) != 1 {
+		t.Errorf("links = %+v", got["links"])
 	}
 	if got := call(t, ts.URL, "agent-read", "work_link", map[string]any{"id": id, "url": "https://example.com", "title": "x"}); !got.failed && got.text != "" {
 		t.Errorf("a read-only run linked: %+v", got)

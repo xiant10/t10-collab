@@ -48,6 +48,9 @@ func TestOpenAPIMatchesTheRoutes(t *testing.T) {
 	routes["DELETE "+tenantTypeRoute] = true
 	routes["POST "+mcpRoute] = true
 	routes["POST /docs/mcp"] = true
+	for _, rt := range New(Deps{}).ontology.Registry().Routes() {
+		routes[rt.Pattern] = true
+	}
 	if a, b := slices.Sorted(maps.Keys(routes)), slices.Sorted(maps.Keys(documented)); !slices.Equal(a, b) {
 		t.Errorf("routes %v\nspec   %v", a, b)
 	}

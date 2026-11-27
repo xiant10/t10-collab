@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://t10.dev/contracts/ontology/descriptor.schema.json",
+  "title": "Ontology descriptor",
+  "description": "What GET /v1/ontology answers. Rules that cross-reference parts of a descriptor are in descriptor.ts.",
+  "type": "object",
+  "required": ["module", "version", "object_types", "action_types", "restricted", "interfaces", "events", "tenant"],
+  "additionalProperties": false,
+  "properties": {
+    "module": { "$ref": "#/$defs/id" },
+    "version": { "type": "integer", "minimum": 1 },
+    "object_types": { "type": "object", "propertyNames": { "$ref": "#/$defs/key" }, "additionalProperties": { "$ref": "#/$defs/objectType" } },
+    "action_types": { "type": "object", "propertyNames": { "$ref": "#/$defs/actionKey" }, "additionalProperties": { "$ref": "#/$defs/actionType" } },
+    "restricted": { "type": "array", "items": { "$ref": "#/$defs/actionKey" } },
+    "interfaces": { "type": "array", "items": { "$ref": "#/$defs/interface" } },
+    "events": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/actionKey" },
+      "additionalProperties": { "type": "object", "required": ["on"], "additionalProperties": false, "properties": { "on": { "$ref": "#/$defs/key" } } }
+    },
+    "tenant": { "$ref": "#/$defs/tenant" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "actionKey": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$" },
+    "propertyKey": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
+    "interface": { "type": "string", "pattern": "^t10:[A-Z][A-Za-z]*$" },
+    "typeRef": { "type": "string", "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "values": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+    "property": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["string", "text", "integer", "decimal", "money_fen", "boolean", "date", "timestamp", "enum", "ref"] },
+        "name": { "$ref": "#/$defs/label" },
+        "name_zh": { "$ref": "#/$defs/label" },
+        "values": { "$ref": "#/$defs/values" },
+        "to": { "$ref": "#/$defs/typeRef" },
+        "sensitivity": { "enum": ["contact", "identity", "personal"] },
+        "derived": { "type": "boolean" },
+        "sources": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "ref" } } }, "then": { "required": ["to"] }, "else": { "not": { "required": ["to"] } } },
+        { "if": { "properties": { "type": { "const": "enum" } } }, "else": { "not": { "required": ["values"] } } },
+        { "if": { "required": ["sources"], "properties": { "sources": { "const": true } } }, "then": { "required": ["derived"], "properties": { "derived": { "const": true } } } }
+      ]
+    },
+    "param": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["string", "text", "integer", "decimal", "money_fen", "boolean", "date", "timestamp", "enum", "ref"] },
+        "name": { "$ref": "#/$defs/label" },
+        "name_zh": { "$ref": "#/$defs/label" },
+        "values": { "$ref": "#/$defs/values" },
+        "to": { "$ref": "#/$defs/typeRef" },
+        "sensitivity": { "enum": ["contact", "identity", "personal"] },
+        "required": { "type": "boolean" },
+        "label": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "ref" } } }, "then": { "required": ["to"] }, "else": { "not": { "required": ["to"] } } },
+        { "if": { "properties": { "type": { "const": "enum" } } }, "else": { "not": { "required": ["values"] } } }
+      ]
+    },
+    "link": {
+      "type": "object",
+      "required": ["to", "many"],
+      "additionalProperties": false,
+      "properties": {
+        "to": { "$ref": "#/$defs/typeRef" },
+        "many": { "type": "boolean" },
+        "name": { "$ref": "#/$defs/label" },
+        "name_zh": { "$ref": "#/$defs/label" },
+        "properties": { "type": "object", "propertyNames": { "$ref": "#/$defs/propertyKey" }, "additionalProperties": { "$ref": "#/$defs/property" } }
+      }
+    },
+    "objectType": {
+      "type": "object",
+      "required": ["label", "label_zh", "title", "implements", "properties", "links"],
+      "additionalProperties": false,
+      "properties": {
+        "label": { "$ref": "#/$defs/label" },
+        "label_zh": { "$ref": "#/$defs/label" },
+        "description": { "type": "string", "maxLength": 400 },
+        "title": { "$ref": "#/$defs/propertyKey" },
+        "implements": { "type": "array", "items": { "$ref": "#/$defs/interface" } },
+        "properties": { "type": "object", "propertyNames": { "$ref": "#/$defs/propertyKey" }, "additionalProperties": { "$ref": "#/$defs/property" } },
+        "links": { "type": "object", "propertyNames": { "$ref": "#/$defs/key" }, "additionalProperties": { "$ref": "#/$defs/link" } }
+      }
+    },
+    "actionType": {
+      "type": "object",
+      "required": ["label", "label_zh", "params", "permission", "idempotent", "undo", "agent"],
+      "additionalProperties": false,
+      "properties": {
+        "label": { "$ref": "#/$defs/label" },
+        "label_zh": { "$ref": "#/$defs/label" },
+        "description": { "type": "string", "maxLength": 400 },
+        "on": { "$ref": "#/$defs/key" },
+        "params": { "type": "object", "propertyNames": { "$ref": "#/$defs/propertyKey" }, "additionalProperties": { "$ref": "#/$defs/param" } },
+        "permission": { "type": "string", "pattern": "^[a-z][a-z0-9_]*:[a-z0-9_.]+$" },
+        "idempotent": { "type": "boolean" },
+        "undo": { "type": "boolean" },
+        "undo_window": { "type": "integer", "minimum": 1 },
+        "agent": { "enum": ["never", "propose", "undoable"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "undo": { "const": true } } }, "then": { "required": ["undo_window"] }, "else": { "not": { "required": ["undo_window"] } } },
+        { "if": { "properties": { "agent": { "const": "undoable" } } }, "then": { "properties": { "undo": { "const": true }, "idempotent": { "const": true } } } }
+      ]
+    },
+    "tenantValues": { "type": "object", "propertyNames": { "$ref": "#/$defs/propertyKey" }, "additionalProperties": { "$ref": "#/$defs/values" } },
+    "tenantProperties": { "type": "object", "propertyNames": { "$ref": "#/$defs/propertyKey" }, "additionalProperties": { "$ref": "#/$defs/property" } },
+    "tenant": {
+      "type": "object",
+      "required": ["revision"],
+      "additionalProperties": false,
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "object_types": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/key" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "values": { "$ref": "#/$defs/tenantValues" },
+              "properties": { "$ref": "#/$defs/tenantProperties" },
+              "links": {
+                "type": "object",
+                "propertyNames": { "$ref": "#/$defs/key" },
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": { "values": { "$ref": "#/$defs/tenantValues" }, "properties": { "$ref": "#/$defs/tenantProperties" } }
+                }
+              }
+            }
+          }
+        },
+        "action_types": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/actionKey" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["values"],
+            "additionalProperties": false,
+            "properties": { "values": { "$ref": "#/$defs/tenantValues" } }
+          }
+        }
+      }
+    }
+  }
+}

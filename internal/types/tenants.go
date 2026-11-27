@@ -132,7 +132,7 @@ func (s *Store) PutTenant(ctx context.Context, service, tenantID string, d Defin
 			return fmt.Errorf("write tenant type: %w", err)
 		}
 		t.Definition = d
-		return nil
+		return bump(ctx, tx)
 	})
 	return t, err
 }
@@ -147,7 +147,9 @@ func (s *Store) DeleteTenant(ctx context.Context, service, tenantID, id string) 
 	if service != "t10-"+module {
 		return ErrNotOwner
 	}
-	if _, err := s.pool.Exec(ctx, "DELETE FROM collab.types WHERE tenant_id = $1 AND id = $2", tenantID, id); err != nil {
+	if _, err := s.pool.Exec(ctx,
+		`WITH gone AS (DELETE FROM collab.types WHERE tenant_id = $1 AND id = $2 RETURNING 1)
+		 UPDATE collab.type_revision SET revision = revision + 1 WHERE EXISTS (SELECT 1 FROM gone)`, tenantID, id); err != nil {
 		return fmt.Errorf("delete tenant type: %w", err)
 	}
 	return nil

@@ -7,6 +7,8 @@ import (
 	"embed"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/xiant10/t10-modkit/ontology/proposals"
+	"github.com/xiant10/t10-modkit/ontology/undo"
 	"github.com/xiant10/t10-modkit/pgdb"
 )
 
@@ -21,9 +23,19 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	return pgdb.Open(ctx, url, 0)
 }
 
-// Migrate applies every migration not yet recorded in collab.schema_migrations.
+// Migrate applies every migration not yet recorded in collab.schema_migrations:
+// collab's own, then the ontology's drafts and undo entries, in the same schema.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	return pgdb.Migrate(ctx, pool, pgdb.Migrations{FS: migrations, Schema: "collab", Lock: migrationLock})
+	for _, m := range []pgdb.Migrations{
+		{FS: migrations, Schema: "collab", Lock: migrationLock},
+		proposals.Migrations("collab", migrationLock),
+		undo.Migrations("collab", migrationLock),
+	} {
+		if err := pgdb.Migrate(ctx, pool, m); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // IsUniqueViolation reports whether err broke the named unique index.

@@ -322,8 +322,7 @@ func (s *Service) moveItem(ctx context.Context, c policy.Caller, item workitems.
 			}
 		}
 		if _, err := tx.Exec(ctx,
-			`UPDATE collab.work_items SET stage = NULLIF($3, ''), rounds = $4, status = $5, version = version + 1, updated_at = now(),
-			        suggested_to = NULL, suggested_note = '', suggested_at = NULL
+			`UPDATE collab.work_items SET stage = NULLIF($3, ''), rounds = $4, status = $5, version = version + 1, updated_at = now()
 			 WHERE tenant_id = $1 AND id = $2`, c.TenantID, item.ID, m.step.Stage, m.rounds, status); err != nil {
 			return fmt.Errorf("move item: %w", err)
 		}
@@ -345,7 +344,7 @@ func (s *Service) moveItem(ctx context.Context, c policy.Caller, item workitems.
 	if err != nil {
 		return workitems.Item{}, err
 	}
-	return out.ForReader(c.UserID), nil
+	return out, nil
 }
 
 // pickHolder picks who of a stage's holders gets the item. It must still be on

@@ -68,9 +68,10 @@ DELETE /internal/v1/types/{type}/tenants/{tenant}   back to the default
 
 People's routes and agent tools are the same as for any item:
 
-- `POST /v1/work-items` and `work_create` take `type`, `fields` and `subject_ref`.
-- `PATCH /v1/work-items/{id}` and `work_update` take `fields`, merged key by key, with null clearing one.
-- `GET /v1/work-items` and `work_list` filter by `type`, `module` and `subject`. Sales' "this deal's asks" is `?subject=sales:deal:d_12`, through the usual read rule.
+- `POST /v1/work-items`, and an agent teammate's `work_create`, take `type`, `fields` and `subject_ref`.
+- `PATCH /v1/work-items/{id}`, and a teammate's `work_update`, take `fields`, merged key by key, with null clearing one.
+- `GET /v1/work-items` filters by `type`, `module` and `subject`. Sales' "this deal's asks" is `?subject=sales:deal:d_12`, through the usual read rule; through the ontology it's a `work_search` with `subject eq sales:deal:d_12`.
+- In the [ontology](ontology.md), the tenant's types are its tenant layer: `work_item.type` and `work_item.state` take their IDs and states, and each type's fields are properties named for the type, such as `sales_presales__when`, set on items of that type only.
 - `GET /v1/types` lists the tenant's types, `collab.task` first.
 
 Status, offers, comments, history, notifications, Home and attention counts work on typed items as on any other.
@@ -100,7 +101,7 @@ A type with `states` gives its items a lifecycle. Each state has a `phase`, one 
   - The state moves before ownership does, so the offers an accept ends find the item already past them.
 - **Transitions** are the other moves. `by` is one or more of `creator`, `owner`, `collaborator`, `recipient`, `list_member`: relations `policy` already computes. `requires` names fields that must be filled, or payload keys that must be given. `payload` allows `reply` (text, up to 10,000 characters) and `links` (up to 20 `{url, title}`, https only), stored on the move's event as its result. `note: required` needs a note.
 - **Nothing else moves the state.** `PATCH` with `status` answers `409 transition_not_allowed`, and a typed item with states never goes on a list workflow (`409 typed_item_not_on_workflow`; auto-start leaves it alone).
-- **`moves`.** `GET /v1/work-items/{id}` and `work_get` list the transitions the caller may take now, with what each needs, so a client draws a button per move.
+- **`moves`.** `GET /v1/work-items/{id}`, and a teammate's `work_workflow`, list the transitions the caller may take now, with what each needs, so a client draws a button per move.
 - **A state a later version removed** can only be left by a transition to a cancelled state.
 
 Every state change is one `item.state_changed` event with `from_state`, `to_state`, `status_from`, `status_to`, and `transition` or `offer_event`, plus any `note` and `payload`. Everyone on the item and its creator are told. A move into a closed phase ends its pending offers.
@@ -154,3 +155,4 @@ A sender whose transfer is accepted stays on as a collaborator, as on any item, 
 
 - **No type is named in code.** A test fails if non-test code mentions the fixture modules. Collab enforces declarations; anything a module does with its items, it does after reading them.
 - **The `participants` rule is checked wherever an item reaches someone new:** `policy.ReportsSQL` and `workitems.ViewAs` (managers), `Create` and `SetList` (lists), `AddCollaborator`, `Reassign`, and the sweep's `successor`. A new way to show an item to someone must check `Item.Participants()`.
+

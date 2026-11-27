@@ -128,11 +128,11 @@ func TestAWorkflowRunsItsLoopsAndEndsWithAPerson(t *testing.T) {
 
 	// The agent at a stage reads where each result takes the item.
 	h.want("carol", "POST", "/v1/work-items/"+item+"/stage", map[string]any{"stage": "stg_test"}, http.StatusOK)
-	got := call(t, mcp, "teammate:acc_test", "work_get", map[string]any{"id": item})
+	got := call(t, mcp, "teammate:acc_test", "work_workflow", map[string]any{"id": item})
 	place := got.data["workflow"].(map[string]any)
 	if place["stage"].(map[string]any)["guide"] != "Run the end-to-end tests" || place["pass"].(map[string]any)["to"] != "carol" ||
 		place["changes"].(map[string]any)["to"] != "acc_lead" {
-		t.Errorf("work_get workflow = %v", place)
+		t.Errorf("work_workflow = %v", place)
 	}
 	// changes needs a note; only the holder finishes a stage.
 	if r := call(t, mcp, "teammate:acc_test", "work_advance", map[string]any{"id": item, "result": "changes", "note": " "}); !r.failed {

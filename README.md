@@ -61,8 +61,10 @@ The auth stack has to include the prerequisite changes, and its setup has to hav
 
 | Action | Tools |
 | --- | --- |
-| `work:read` | `work_list`, `work_get`, `work_comments`, `work_history`, `work_offers`, `work_lists`, `work_people` |
-| `work:write` | `work_create`, `work_update`, `work_comment` |
+| `work:read` | `work_describe`, `work_search`, `work_get`, `work_people`, `work_history` |
+| `work:propose` | `work_propose`: drafts the person confirms in Workbench |
+| `work:act` | `work_act`: a task of the person's own, which they can undo for a day |
+| `work:write`, `work:send` | Agent teammates' own tools, for a run whose principal is an agent account: see [docs/api.md](docs/api.md#agent-tools-mcp) |
 
 - Tools call the same services as the routes, so an agent can do no more than its person.
 - A write records the grant in `events.actor_grant_id`, and the event shows it as `actor_grant_id`.
@@ -74,7 +76,7 @@ To turn it on, deploy `auth-server` first, because `agent-pi` asks for what `cli
 
 ```sh
 COLLAB_MCP_URL=http://t10-collab:8082/mcp
-GRANT_ACTIONS=agent:use,work:read,work:write
+GRANT_ACTIONS=agent:use,work:read,work:propose,work:act
 GRANT_AUDIENCES=agent-pi,t10-collab
 ```
 
@@ -95,6 +97,7 @@ Tests need a throwaway Postgres, because they drop the `collab` schema. `make te
 | --- | --- |
 | `internal/workitems` | Items, status, owners, collaborators, comments |
 | `internal/types` | Item types modules declare, see [`docs/types.md`](docs/types.md) |
+| `internal/ontology` | The ontology over tasks, lists, comments and offers, see [`docs/ontology.md`](docs/ontology.md) |
 | `internal/offers` | Sending, accepting, declining, withdrawing |
 | `internal/lists` | Shared lists, their members and their unit links |
 | `internal/sweep` | The 15-minute job: team-linked lists, and moving work from people who leave |

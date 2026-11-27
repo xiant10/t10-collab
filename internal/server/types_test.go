@@ -376,7 +376,9 @@ func TestNoTypeIsNamedInCode(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			for _, name := range []string{"sales", "property", "presales", "followup"} {
+			// "property" is also the ontology's word, so only a string naming
+			// the module counts: "property: or "property.
+			for _, name := range []string{"sales", `"property:`, `"property.`, "presales", "followup"} {
 				if bytes.Contains(bytes.ToLower(src), []byte(name)) {
 					t.Errorf("%s names %q", path, name)
 				}
@@ -392,25 +394,29 @@ func TestNoTypeIsNamedInCode(t *testing.T) {
 func TestAgentsCreateAndFindTypedItems(t *testing.T) {
 	h := newHarness(t)
 	h.types()
-	ts := h.mcpServer()
-	created := call(t, ts.URL, "agent-write", "work_create", map[string]any{
+	ts := h.teammateServer()
+	created := call(t, ts.URL, "teammate:acc_lead", "work_create", map[string]any{
 		"title": "Deck", "type": "sales.presales", "subject_ref": "sales:deal:d_12", "fields": map[string]any{"what": "A deck"},
 	})
 	if created.failed || created.data["type"] != "sales.presales" {
 		t.Fatalf("create = %+v", created)
 	}
-	if bad := call(t, ts.URL, "agent-write", "work_create", map[string]any{"title": "Deck", "type": "sales.presales", "fields": map[string]any{"x": 1}}); !bad.failed {
+	if bad := call(t, ts.URL, "teammate:acc_lead", "work_create", map[string]any{"title": "Deck", "type": "sales.presales", "fields": map[string]any{"x": 1}}); !bad.failed {
 		t.Errorf("an undeclared field = %+v", bad)
 	}
-	updated := call(t, ts.URL, "agent-write", "work_update", map[string]any{
+	updated := call(t, ts.URL, "teammate:acc_lead", "work_update", map[string]any{
 		"id": created.data["id"], "version": created.data["version"], "fields": map[string]any{"when": "Friday"},
 	})
 	if updated.failed || updated.data["fields"].(map[string]any)["when"] != "Friday" {
 		t.Errorf("update = %+v", updated)
 	}
-	found := call(t, ts.URL, "agent-read", "work_list", map[string]any{"module": "sales", "subject": "sales:deal:d_12"})
-	if found.failed || len(found.data["items"].([]any)) != 1 {
-		t.Errorf("list = %+v", found)
+	found := call(t, ts.URL, "teammate:acc_lead", "work_search", map[string]any{"type": "work_item", "filter": map[string]any{"and": []any{
+		map[string]any{"property": "type", "op": "eq", "value": "sales.presales"},
+		map[string]any{"property": "subject", "op": "eq", "value": "sales:deal:d_12"},
+		map[string]any{"property": "sales_presales__when", "op": "eq", "value": "Friday"},
+	}}})
+	if found.failed || len(found.data["objects"].([]any)) != 1 {
+		t.Errorf("search = %+v", found)
 	}
 }
 
@@ -542,11 +548,11 @@ func TestAnAssignmentNeedsAnAssignMapping(t *testing.T) {
 	h.wantState("carol", item, "accepted", "doing")
 
 	// The agent teammate delivers with work_transition; an assistant can't.
-	moves := call(t, ts.URL, "teammate:acc_lead", "work_get", map[string]any{"id": item})
+	moves := call(t, ts.URL, "teammate:acc_lead", "work_workflow", map[string]any{"id": item})
 	if moves.failed || !slices.Equal(moveIDs(moves.data), []string{"deliver"}) {
-		t.Fatalf("work_get = %+v", moves)
+		t.Fatalf("work_workflow = %+v", moves)
 	}
-	if got := call(t, ts.URL, "agent-write", "work_transition", map[string]any{"id": item, "transition": "deliver"}); !got.failed {
+	if got := call(t, ts.URL, "agent-assistant", "work_transition", map[string]any{"id": item, "transition": "deliver"}); !got.failed {
 		t.Errorf("an assistant moved it: %+v", got)
 	}
 	done := call(t, ts.URL, "teammate:acc_lead", "work_transition", map[string]any{

@@ -24,6 +24,7 @@ import (
 	"t10-collab/internal/activity"
 	"t10-collab/internal/lists"
 	"t10-collab/internal/offers"
+	"t10-collab/internal/ontology"
 	"t10-collab/internal/policy"
 	"t10-collab/internal/roles"
 	"t10-collab/internal/telemetry"
@@ -52,7 +53,7 @@ const (
 // manifest tells a client this module is here and what it can rely on. Routes
 // and fields can only be added within an api_version.
 var manifest = map[string]any{
-	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention", "item_types"},
+	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention", "item_types", "ontology"},
 	// trigger_events are the kinds this posts to t10-automations, each about one
 	// agent account, which an automation can fire on.
 	"trigger_events": []string{"work.offered", "work.assigned", "work.accepted", "work.declined", "work.commented", "list.item_added"},
@@ -95,10 +96,15 @@ type Deps struct {
 // Server handles the API.
 type Server struct {
 	Deps
+	ontology *ontology.Ontology
 }
 
 // New builds a Server.
-func New(d Deps) *Server { return &Server{Deps: d} }
+func New(d Deps) *Server {
+	s := &Server{Deps: d}
+	s.ontology = s.newOntology()
+	return s
+}
 
 type handler func(w http.ResponseWriter, r *http.Request, c policy.Caller)
 
@@ -132,7 +138,6 @@ func (s *Server) routes() []route {
 		{"POST", "/v1/work-items/{id}/send", policy.ActionSend, s.handleSend},
 		{"POST", "/v1/work-items/{id}/advance", policy.ActionSend, s.handleAdvance},
 		{"POST", "/v1/work-items/{id}/stage", policy.ActionSend, s.handlePutAtStage},
-		{"DELETE", "/v1/work-items/{id}/suggestion", policy.ActionWrite, s.handleDismissSuggestion},
 
 		{"GET", "/v1/offers", policy.ActionRead, s.handleListOffers},
 		{"POST", "/v1/offers/{id}/accept", policy.ActionSend, s.handleAccept},
@@ -172,6 +177,8 @@ func (s *Server) routes() []route {
 
 // Handler returns the routed API.
 func (s *Server) Handler() http.Handler {
+	// Built again for this server, so that a copy's Verifier reads its callers.
+	s.ontology = s.newOntology()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +190,7 @@ func (s *Server) Handler() http.Handler {
 		key := rt.method + " " + rt.pattern
 		mux.Handle(key, telemetry.Wrap(key, s.guard(rt)))
 	}
+	s.ontologyRoutes(mux)
 	key := "GET " + attentionRoute
 	mux.Handle(key, telemetry.Wrap(key, http.HandlerFunc(s.handleAttention)))
 	key = "PUT " + typeRoute
@@ -655,14 +663,6 @@ func (s *Server) handlePutAtStage(w http.ResponseWriter, r *http.Request, c poli
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
-}
-
-func (s *Server) handleDismissSuggestion(w http.ResponseWriter, r *http.Request, c policy.Caller) {
-	if err := s.Items.DismissSuggestion(r.Context(), c, r.PathValue("id")); err != nil {
-		failure(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleUpdateItem(w http.ResponseWriter, r *http.Request, c policy.Caller) {

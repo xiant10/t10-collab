@@ -98,9 +98,6 @@ type Item struct {
 	Collaborators []string   `json:"collaborators"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
-	// Suggestion is a send an assistant drafted, for an owner to make. Only
-	// owners are shown it.
-	Suggestion *Suggestion `json:"suggestion,omitempty"`
 	// Links point to where its work happens, such as a pull request.
 	Links []Link `json:"links"`
 	// Stage is the item's stage on its list's workflow, empty off it. Rounds
@@ -127,21 +124,6 @@ type Item struct {
 // Participants reports whether only the item's participants may read it.
 func (i Item) Participants() bool { return i.Visibility == types.VisibilityParticipants }
 
-// Suggestion is who an assistant thinks an item should go to, and the note.
-type Suggestion struct {
-	To   string    `json:"to"`
-	Note string    `json:"note"`
-	At   time.Time `json:"at"`
-}
-
-// ForReader leaves out what only an owner may see.
-func (i Item) ForReader(userID string) Item {
-	if !slices.Contains(i.Owners, userID) {
-		i.Suggestion = nil
-	}
-	return i
-}
-
 // Closed reports whether the item is finished, so it can't be sent.
 func (i Item) Closed() bool { return closed(i.Status) }
 
@@ -150,21 +132,16 @@ func closed(status string) bool { return status == StatusDone || status == Statu
 const itemColumns = `i.id, i.title, i.description, i.status, i.priority, i.due_at, i.creator_id, COALESCE(i.list_id, ''), i.version,
 	ARRAY(SELECT o.user_id FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id ORDER BY o.user_id),
 	ARRAY(SELECT c.user_id FROM collab.work_item_collaborators c WHERE c.tenant_id = i.tenant_id AND c.item_id = i.id ORDER BY c.user_id),
-	i.created_at, i.updated_at, i.suggested_to, i.suggested_note, i.suggested_at, COALESCE(i.stage, ''), i.rounds,
+	i.created_at, i.updated_at, COALESCE(i.stage, ''), i.rounds,
 	i.type, i.type_version, i.fields, COALESCE(i.state, ''), COALESCE(i.subject_ref, ''), i.visibility, i.departure, ` + linksColumn
 
-func scanItem(row pgx.Row) (Item, error) {
+// scanItem reads itemColumns, and then the columns after them into extra.
+func scanItem(row pgx.Row, extra ...any) (Item, error) {
 	var i Item
-	var to *string
-	var note string
-	var at *time.Time
 	var links []byte
-	err := row.Scan(&i.ID, &i.Title, &i.Description, &i.Status, &i.Priority, &i.DueAt, &i.CreatorID, &i.ListID, &i.Version,
-		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &to, &note, &at, &i.Stage, &i.Rounds,
-		&i.Type, &i.TypeVersion, &i.Fields, &i.State, &i.SubjectRef, &i.Visibility, &i.Departure, &links)
-	if to != nil && at != nil {
-		i.Suggestion = &Suggestion{To: *to, Note: note, At: *at}
-	}
+	err := row.Scan(append([]any{&i.ID, &i.Title, &i.Description, &i.Status, &i.Priority, &i.DueAt, &i.CreatorID, &i.ListID, &i.Version,
+		&i.Owners, &i.Collaborators, &i.CreatedAt, &i.UpdatedAt, &i.Stage, &i.Rounds,
+		&i.Type, &i.TypeVersion, &i.Fields, &i.State, &i.SubjectRef, &i.Visibility, &i.Departure, &links}, extra...)...)
 	if err == nil {
 		i.Links, err = scanLinks(links)
 	}
@@ -385,7 +362,7 @@ func (s *Service) Read(ctx context.Context, c policy.Caller, id string) (Item, p
 	if err != nil {
 		return Item{}, policy.Relation{}, err
 	}
-	return relate(ctx, s.pool, c, item.ForReader(c.UserID))
+	return relate(ctx, s.pool, c, item)
 }
 
 // View returns an item the caller can read, or one owned by someone they manage
@@ -414,7 +391,7 @@ func (s *Service) ViewAs(ctx context.Context, c policy.Caller, id string) (Item,
 	if item.Participants() || !slices.ContainsFunc(item.Owners, func(owner string) bool { return slices.Contains(reports, owner) }) {
 		return Item{}, policy.Relation{}, policy.ErrNotFound
 	}
-	return item.ForReader(c.UserID), policy.Relation{}, nil
+	return item, policy.Relation{}, nil
 }
 
 // managed returns whose owned items the tenant's setting lets the caller read.
@@ -753,7 +730,7 @@ func (s *Service) List(ctx context.Context, c policy.Caller, f Filter) ([]Item, 
 	}
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) {
 		item, err := scanItem(row)
-		return item.ForReader(c.UserID), err
+		return item, err
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("list items: %w", err)
@@ -914,7 +891,7 @@ func (s *Service) Update(ctx context.Context, c policy.Caller, id string, p Patc
 	if err != nil {
 		return Item{}, err
 	}
-	return item.ForReader(c.UserID), nil
+	return item, nil
 }
 
 // Delete hides an item from everyone. Its pending offers are withdrawn first, so
@@ -1129,7 +1106,7 @@ func (s *Service) SetList(ctx context.Context, c policy.Caller, id, listID strin
 	if err != nil {
 		return Item{}, err
 	}
-	return item.ForReader(c.UserID), nil
+	return item, nil
 }
 
 // AddCollaborator lets someone edit an item and comment on it. The org read runs
@@ -1265,28 +1242,6 @@ func (s *Service) AddComment(ctx context.Context, c policy.Caller, id, body stri
 		return Comment{}, err
 	}
 	return comment, nil
-}
-
-// DismissSuggestion clears a suggested send, for someone who could make it.
-func (s *Service) DismissSuggestion(ctx context.Context, c policy.Caller, id string) error {
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		item, relation, err := Lock(ctx, tx, c, id)
-		if err != nil {
-			return err
-		}
-		if !relation.CanSend() {
-			return policy.ErrForbidden
-		}
-		if item.Suggestion == nil {
-			return nil
-		}
-		if _, err := tx.Exec(ctx,
-			"UPDATE collab.work_items SET suggested_to = NULL, suggested_note = '', suggested_at = NULL WHERE tenant_id = $1 AND id = $2",
-			c.TenantID, id); err != nil {
-			return fmt.Errorf("dismiss suggestion: %w", err)
-		}
-		return activity.Record(ctx, tx, c, activity.Change{ItemID: id, Kind: "item.suggestion_dismissed", Detail: map[string]any{"to": item.Suggestion.To}})
-	})
 }
 
 // Working is an agent account that was told about an item and hasn't acted on

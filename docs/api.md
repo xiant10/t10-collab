@@ -53,7 +53,6 @@ Users see these as "tasks".
 | `GET`, `POST /v1/work-items/{id}/comments` | Read comments, oldest first, or add one: `{body, mentions?}`. `mentions` are user IDs to tell, who must be able to read the item |
 | `POST /v1/work-items/{id}/links` | Add a link: `{url, title?, kind?}`, with `url` https and at most 20 per item. `kind` is `pull_request`, `commit`, `build`, `document` or `other`, guessed from the URL when left out |
 | `DELETE /v1/work-items/{id}/links/{link}` | Remove a link |
-| `DELETE /v1/work-items/{id}/suggestion` | Dismiss a send an assistant suggested |
 
 Creating an item and sending it at once:
 
@@ -155,6 +154,10 @@ These need a tenant admin, or a member holding `work:admin` from `auth-server`.
 | `PUT`, `DELETE /internal/v1/types/{type}/tenants/{tenant}` | The owning module tailors a type for one tenant, or puts it back on the default. See [tenant versions](types.md#tenant-versions) |
 | `GET /internal/v1/events?module=&after=&limit=` | The events about a module's [typed items](types.md#telling-the-owning-module), from every tenant, for that module's service token only |
 
+## Ontology
+
+Collab serves the workspace's ontology contract (`contracts/ontology/README.md`) over its tasks, lists, comments and offers, with the routes the contract names: `GET /v1/ontology`, `GET /v1/objects/{type}/{id}`, `POST /v1/objects/{type}/search`, `GET /v1/objects/{type}/{id}/links/{link}`, `POST /v1/objects/resolve`, `POST /v1/actions/{action}/validate` and `/apply`, `POST /v1/undo/{id}`, and `GET /v1/proposals` with `POST /v1/proposals/{id}/confirm` and `/dismiss`. What it declares, who reads what, and each action's tier are in [ontology.md](ontology.md); the core descriptor is pinned in [ontology.json](ontology.json).
+
 ## Agent tools (MCP)
 
 `POST /mcp` takes one JSON-RPC message per request (MCP over Streamable HTTP, with no session or stream). `initialize`, `ping` and `tools/list` need no token. `tools/call` needs a delegated token listing `t10-collab`, with the tool's action on the token and on every grant in its chain.
@@ -164,25 +167,25 @@ POST /mcp
 Authorization: Bearer <delegated token>
 
 {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
- "params": {"name": "work_comment", "arguments": {"id": "wi_3c1…", "body": "Draft is ready for review."}}}
+ "params": {"name": "work_propose", "arguments": {"action": "work_item.comment", "object": "collab:work_item:wi_3c1…", "params": {"body": "Draft is ready for review."}}}}
 ```
 
 A result's text is JSON inside one `<module_record>` tag, which marks it as data for the model. A refused or failed call still answers `200`, with `isError: true` and a reason the model can read.
 
 | Tool | Action | Arguments | Does |
 | --- | --- | --- | --- |
-| `work_list` | `work:read` | `view?`, `status?`, `list_id?`, `due?` (`overdue`, `soon`), `type?`, `module?`, `subject?`, paging | List the principal's items |
-| `work_get` | `work:read` | `id` | One item in full, with its workflow stage and a typed item's `moves` |
-| `work_comments` | `work:read` | `id`, paging | Comments, oldest first |
-| `work_history` | `work:read` | `id`, paging | History, oldest first |
-| `work_offers` | `work:read` | `box` (`inbox`, `sent`), paging | Offers waiting, or sent |
-| `work_lists` | `work:read` | `archived?`, paging | Shared lists |
+| `work_describe` | `work:read` | none | The [ontology](ontology.md): object types, properties, actions and their tiers, with the tenant's item types |
+| `work_search` | `work:read` | `type`, `filter?`, `sort?`, `limit?`, `cursor?` | Search tasks, lists, comments or offers. "My overdue tasks" is `relation eq owner` and `deadline lt` now |
+| `work_get` | `work:read` | `ref`, `sources?` | One object, with the actions on it and whether each is allowed now |
+| `work_propose` | `work:propose` | `action`, `object?`, `params` | Draft an action for the person to confirm in Workbench |
+| `work_act` | `work:act` | `action`, `object?`, `revision?`, `params`, `request_id` | Take an undoable action: only `work_item.create`, which the person can undo for a day |
 | `work_people` | `work:read` | `q?` or `ids?`, paging | Find colleagues, or name user IDs |
-| `work_create` | `work:write` | `title`, `description?`, `priority?`, `due_at?`, `list_id?`, `unowned?`, `suggest_to?`, `suggest_note?`, `type?`, `fields?`, `subject_ref?` | Create an item that stays with the principal, optionally suggesting a send |
-| `work_suggest` | `work:write` | `id`, `to`, `note?` | Suggest a send, for the person to make |
-| `work_update` | `work:write` | `id`, `version`, and fields to change | Edit fields or status |
-| `work_comment` | `work:write` | `id`, `body`, `mentions?` | Comment, telling people on the item |
-| `work_link` | `work:write` | `id`, `url`, `title?`, `kind?` | Add a link |
+| `work_history` | `work:read` | `id`, paging | History, oldest first |
+| `work_workflow` | `work:read`, teammates only | `id` | Where an item is on its workflow, and a typed item's `moves` and `version` |
+| `work_create` | `work:write`, teammates only | `title`, `description?`, `priority?`, `due_at?`, `list_id?`, `unowned?`, `type?`, `fields?`, `subject_ref?` | Create an item the teammate owns |
+| `work_update` | `work:write`, teammates only | `id`, `version`, and fields to change | Edit fields or status |
+| `work_comment` | `work:write`, teammates only | `id`, `body`, `mentions?` | Comment, telling people on the item |
+| `work_link` | `work:write`, teammates only | `id`, `url`, `title?`, `kind?` | Add a link |
 | `work_send` | `work:send`, teammates only | `id`, `to`, `note`, `mode?` | Send an item |
 | `work_advance` | `work:send`, teammates only | `id`, `result`, `note`, `to?` | Finish its workflow stage |
 | `work_transition` | `work:write`, teammates only | `id`, `transition`, `note?`, `payload?`, `version?` | Take a typed item's transition |
@@ -190,7 +193,9 @@ A result's text is JSON inside one `<module_record>` tag, which marks it as data
 | `work_decline` | `work:send`, teammates only | `offer_id`, `note` | Decline an offer |
 | `work_claim` | `work:write`, teammates only | `id` | Claim an unowned list item |
 
-"Teammates only" means the token's principal must be an agent account (`acc_…`). An assistant acting for a person reads and drafts, and the person sends. A grant with constraints is refused, because collab defines none.
+The list is the same for every caller, as the ontology contract has it. A teammate's tools take an `id` or `offer_id` either plain or as the reference the generated tools answer, such as `collab:work_item:wi_3c1…`.
+
+"Teammates only" means the token's principal must be an agent account (`acc_…`), acting on its own items under its own rights; anyone else is told to draft with `work_propose`. An assistant acting for a person reads and drafts, and the person confirms: it holds `work:read`, `work:propose` and `work:act`, and a teammate's run holds `work:read`, `work:write` and `work:send`. A grant with constraints is refused, because collab defines none.
 
 ## Events it posts
 

@@ -1,0 +1,528 @@
+{
+  "module": "collab",
+  "version": 1,
+  "object_types": {
+    "comment": {
+      "label": "Comment",
+      "label_zh": "评论",
+      "description": "A comment on a task, which everyone who reads the task reads.",
+      "title": "body",
+      "implements": [],
+      "properties": {
+        "author": {
+          "type": "ref",
+          "name": "By",
+          "name_zh": "评论人",
+          "to": "auth:user"
+        },
+        "body": {
+          "type": "text",
+          "name": "Comment",
+          "name_zh": "内容"
+        },
+        "created_at": {
+          "type": "timestamp",
+          "name": "Written",
+          "name_zh": "时间"
+        },
+        "item": {
+          "type": "ref",
+          "name": "On",
+          "name_zh": "所属任务",
+          "to": "collab:work_item"
+        }
+      },
+      "links": {}
+    },
+    "list": {
+      "label": "List",
+      "label_zh": "清单",
+      "description": "A shared list of tasks that its members manage together, often a team's. A member can take any unowned task on it.",
+      "title": "name",
+      "implements": [],
+      "properties": {
+        "archived": {
+          "type": "boolean",
+          "name": "Archived",
+          "name_zh": "已归档"
+        },
+        "created_at": {
+          "type": "timestamp",
+          "name": "Created",
+          "name_zh": "创建时间"
+        },
+        "name": {
+          "type": "string",
+          "name": "Name",
+          "name_zh": "名称"
+        },
+        "role": {
+          "type": "enum",
+          "name": "Your role",
+          "name_zh": "你的角色",
+          "values": [
+            "owner",
+            "member"
+          ],
+          "derived": true
+        }
+      },
+      "links": {
+        "items": {
+          "to": "collab:work_item",
+          "many": true,
+          "name": "Tasks",
+          "name_zh": "任务"
+        },
+        "members": {
+          "to": "auth:user",
+          "many": true,
+          "name": "Members",
+          "name_zh": "成员"
+        }
+      }
+    },
+    "offer": {
+      "label": "Hand-off",
+      "label_zh": "转交",
+      "description": "A task sent from one person to another: an offer they accept or decline, or an assignment down the reporting line. mode transfer hands it over; share adds them beside the owners. Only people answer offers.",
+      "title": "note",
+      "implements": [],
+      "properties": {
+        "created_at": {
+          "type": "timestamp",
+          "name": "Sent",
+          "name_zh": "发送时间"
+        },
+        "from": {
+          "type": "ref",
+          "name": "From",
+          "name_zh": "发送人",
+          "to": "auth:user"
+        },
+        "item": {
+          "type": "ref",
+          "name": "Task",
+          "name_zh": "任务",
+          "to": "collab:work_item"
+        },
+        "mode": {
+          "type": "enum",
+          "name": "Mode",
+          "name_zh": "方式",
+          "values": [
+            "transfer",
+            "share"
+          ]
+        },
+        "note": {
+          "type": "text",
+          "name": "Note",
+          "name_zh": "附言"
+        },
+        "responded_at": {
+          "type": "timestamp",
+          "name": "Answered",
+          "name_zh": "答复时间"
+        },
+        "state": {
+          "type": "enum",
+          "name": "State",
+          "name_zh": "状态",
+          "values": [
+            "pending",
+            "assigned",
+            "accepted",
+            "declined",
+            "withdrawn",
+            "voided"
+          ]
+        },
+        "to": {
+          "type": "ref",
+          "name": "To",
+          "name_zh": "接收人",
+          "to": "auth:user"
+        }
+      },
+      "links": {}
+    },
+    "work_item": {
+      "label": "Task",
+      "label_zh": "任务",
+      "description": "Work people and agent teammates give each other: a task, or an item of a module's type such as a help request. Each says where it stands for the user: their relation to it, its pending offers, and the agent teammates working on it.",
+      "title": "title",
+      "implements": [
+        "t10:HasDeadline",
+        "t10:Commentable"
+      ],
+      "properties": {
+        "comment_count": {
+          "type": "integer",
+          "name": "Comments",
+          "name_zh": "评论数",
+          "derived": true
+        },
+        "created_at": {
+          "type": "timestamp",
+          "name": "Created",
+          "name_zh": "创建时间"
+        },
+        "creator": {
+          "type": "ref",
+          "name": "Created by",
+          "name_zh": "创建人",
+          "to": "auth:user"
+        },
+        "deadline": {
+          "type": "timestamp",
+          "name": "Due",
+          "name_zh": "截止时间"
+        },
+        "description": {
+          "type": "text",
+          "name": "Description",
+          "name_zh": "说明"
+        },
+        "list": {
+          "type": "ref",
+          "name": "List",
+          "name_zh": "清单",
+          "to": "collab:list"
+        },
+        "pending_offers": {
+          "type": "integer",
+          "name": "Offers waiting",
+          "name_zh": "待接收",
+          "derived": true
+        },
+        "priority": {
+          "type": "enum",
+          "name": "Priority",
+          "name_zh": "优先级",
+          "values": [
+            "low",
+            "normal",
+            "high"
+          ]
+        },
+        "relation": {
+          "type": "enum",
+          "name": "Your relation",
+          "name_zh": "你和它的关系",
+          "values": [
+            "owner",
+            "creator",
+            "collaborator",
+            "recipient",
+            "list_member",
+            "manager"
+          ],
+          "derived": true
+        },
+        "state": {
+          "type": "enum",
+          "name": "State",
+          "name_zh": "阶段"
+        },
+        "status": {
+          "type": "enum",
+          "name": "Status",
+          "name_zh": "状态",
+          "values": [
+            "todo",
+            "doing",
+            "done",
+            "cancelled"
+          ]
+        },
+        "subject": {
+          "type": "string",
+          "name": "About",
+          "name_zh": "关于"
+        },
+        "title": {
+          "type": "string",
+          "name": "Title",
+          "name_zh": "标题"
+        },
+        "type": {
+          "type": "enum",
+          "name": "Type",
+          "name_zh": "类型",
+          "values": [
+            "collab.task"
+          ]
+        },
+        "updated_at": {
+          "type": "timestamp",
+          "name": "Updated",
+          "name_zh": "更新时间"
+        },
+        "working": {
+          "type": "integer",
+          "name": "Agents working on it",
+          "name_zh": "处理中的智能体",
+          "derived": true
+        }
+      },
+      "links": {
+        "collaborators": {
+          "to": "auth:user",
+          "many": true,
+          "name": "Collaborators",
+          "name_zh": "协作者"
+        },
+        "comments": {
+          "to": "collab:comment",
+          "many": true,
+          "name": "Comments",
+          "name_zh": "评论"
+        },
+        "offers": {
+          "to": "collab:offer",
+          "many": true,
+          "name": "Offers",
+          "name_zh": "转交"
+        },
+        "owners": {
+          "to": "auth:user",
+          "many": true,
+          "name": "Owners",
+          "name_zh": "负责人"
+        }
+      }
+    }
+  },
+  "action_types": {
+    "work_item.comment": {
+      "label": "Comment",
+      "label_zh": "评论",
+      "description": "Comment on a task. Everyone on it is told at once, so it can't be taken back: the user confirms it first. Write @usr_… for someone the user should mention.",
+      "on": "work_item",
+      "params": {
+        "body": {
+          "type": "text",
+          "name": "Comment",
+          "name_zh": "内容",
+          "required": true
+        }
+      },
+      "permission": "work:write",
+      "idempotent": false,
+      "undo": false,
+      "agent": "propose"
+    },
+    "work_item.create": {
+      "label": "New task",
+      "label_zh": "新建任务",
+      "description": "Make a task owned by the user, which nobody else sees until they share or send it. The user can undo it for a day, until someone else is on it.",
+      "params": {
+        "description": {
+          "type": "text",
+          "name": "Description",
+          "name_zh": "说明"
+        },
+        "due": {
+          "type": "timestamp",
+          "name": "Due",
+          "name_zh": "截止时间"
+        },
+        "priority": {
+          "type": "enum",
+          "name": "Priority",
+          "name_zh": "优先级",
+          "values": [
+            "low",
+            "normal",
+            "high"
+          ]
+        },
+        "subject": {
+          "type": "string",
+          "name": "About",
+          "name_zh": "关于"
+        },
+        "title": {
+          "type": "string",
+          "name": "Title",
+          "name_zh": "标题",
+          "required": true
+        }
+      },
+      "permission": "work:write",
+      "idempotent": true,
+      "undo": true,
+      "undo_window": 86400,
+      "agent": "undoable"
+    },
+    "work_item.edit": {
+      "label": "Edit",
+      "label_zh": "修改",
+      "description": "Change a task's title, description, priority or due date. Everyone on the task sees the change, so the user confirms it.",
+      "on": "work_item",
+      "params": {
+        "clear_deadline": {
+          "type": "boolean",
+          "name": "No due date",
+          "name_zh": "取消截止时间"
+        },
+        "description": {
+          "type": "text",
+          "name": "Description",
+          "name_zh": "说明"
+        },
+        "due": {
+          "type": "timestamp",
+          "name": "Due",
+          "name_zh": "截止时间"
+        },
+        "priority": {
+          "type": "enum",
+          "name": "Priority",
+          "name_zh": "优先级",
+          "values": [
+            "low",
+            "normal",
+            "high"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "name": "Title",
+          "name_zh": "标题"
+        }
+      },
+      "permission": "work:write",
+      "idempotent": false,
+      "undo": false,
+      "agent": "propose"
+    },
+    "work_item.link": {
+      "label": "Add a link",
+      "label_zh": "加链接",
+      "description": "Add a link to where the task's work is, such as a document or pull request. https only.",
+      "on": "work_item",
+      "params": {
+        "kind": {
+          "type": "enum",
+          "name": "Kind",
+          "name_zh": "类型",
+          "values": [
+            "pull_request",
+            "commit",
+            "build",
+            "document",
+            "other"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "name": "Title",
+          "name_zh": "标题",
+          "required": true
+        },
+        "url": {
+          "type": "string",
+          "name": "Link",
+          "name_zh": "链接",
+          "required": true
+        }
+      },
+      "permission": "work:write",
+      "idempotent": false,
+      "undo": false,
+      "agent": "propose"
+    },
+    "work_item.move": {
+      "label": "Move",
+      "label_zh": "推进",
+      "description": "Take one of the steps a module's item type allows from the item's state, such as answering a help request. The company's steps are move's values in work_describe; the item's actions say whether a move is open to the user now.",
+      "on": "work_item",
+      "params": {
+        "move": {
+          "type": "enum",
+          "name": "Step",
+          "name_zh": "步骤",
+          "required": true,
+          "label": true
+        },
+        "note": {
+          "type": "text",
+          "name": "Note",
+          "name_zh": "备注"
+        }
+      },
+      "permission": "work:write",
+      "idempotent": false,
+      "undo": false,
+      "agent": "propose"
+    },
+    "work_item.send": {
+      "label": "Send",
+      "label_zh": "转交",
+      "description": "Send the user's task to a colleague, with a note. Down the user's reporting line it's assigned; otherwise it's an offer the colleague accepts or declines. transfer hands it over; share adds them beside the user. Find colleagues with work_people.",
+      "on": "work_item",
+      "params": {
+        "mode": {
+          "type": "enum",
+          "name": "Mode",
+          "name_zh": "方式",
+          "values": [
+            "transfer",
+            "share"
+          ]
+        },
+        "note": {
+          "type": "text",
+          "name": "Note",
+          "name_zh": "附言"
+        },
+        "to": {
+          "type": "ref",
+          "name": "To",
+          "name_zh": "转给",
+          "to": "auth:user",
+          "required": true
+        }
+      },
+      "permission": "work:send",
+      "idempotent": false,
+      "undo": false,
+      "agent": "propose"
+    },
+    "work_item.set_status": {
+      "label": "Set status",
+      "label_zh": "改状态",
+      "description": "Move a plain task to todo, doing, done or cancelled. An item of a module's type moves by its own steps instead: work_item.move.",
+      "on": "work_item",
+      "params": {
+        "to": {
+          "type": "enum",
+          "name": "To",
+          "name_zh": "改为",
+          "values": [
+            "todo",
+            "doing",
+            "done",
+            "cancelled"
+          ],
+          "required": true
+        }
+      },
+      "permission": "work:write",
+      "idempotent": false,
+      "undo": false,
+      "agent": "propose"
+    }
+  },
+  "restricted": [],
+  "interfaces": [
+    "t10:Commentable",
+    "t10:HasDeadline"
+  ],
+  "events": {},
+  "tenant": {
+    "revision": 0
+  }
+}

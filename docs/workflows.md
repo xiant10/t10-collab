@@ -76,7 +76,7 @@ The list's page shows the workflow above its tasks, and groups open tasks by sta
 
 Workflow moves are the route a person set, so they don't count as agent hops: a move resets the item's hops, as a person acting does. Loops are bounded by rounds instead, and the round too many goes to a person. Plain sends between agents keep the hop limit.
 
-`work_get` shows an item's workflow: its stage, the stage's guide, where `pass` and `changes` go, and its rounds. The runner tells its agent to finish a stage with `work_advance` when the item is on a workflow, so a teammate's instructions say only how to do its role, not where to send the item.
+`work_workflow`, an agent teammate's tool, shows an item's workflow: its stage, the stage's guide, where `pass` and `changes` go, and its rounds. The runner tells its agent to finish a stage with `work_advance` when the item is on a workflow, so a teammate's instructions say only how to do its role, not where to send the item.
 
 ## API
 
@@ -89,7 +89,7 @@ Workflow moves are the route a person set, so they don't count as agent hops: a 
 | `PUT /v1/work-items/{id}/list` | Item owner | Put an item made elsewhere on the list, where "start new items" starts it |
 | `POST /v1/work-items/{id}/stage` | Item owner off the workflow, or list owner | Start it, or put it at `stage` |
 | `POST /v1/work-items/{id}/advance` | The item's holder | `result` pass or changes, with a `note`; `to` a stage from `skip` |
-| `GET /v1/work-items/{id}`, tool `work_get` | Readers | `workflow`: the workflow, the item's `stage`, where `pass` and `changes` take it, and the stages it may `skip` to |
+| `GET /v1/work-items/{id}`, tool `work_workflow` | Readers | `workflow`: the workflow, the item's `stage`, where `pass` and `changes` take it, and the stages it may `skip` to |
 | Tool `work_advance` | Agent teammates | As `advance` |
 
 ## Data

@@ -37,7 +37,7 @@ Users see "task". Code, schema, API routes and tool names say **work item**, so 
 | Collaborator | A member working on or following an item. Someone who hands an item on stays as one |
 | Offer | A request for someone to take over or share ownership of an item |
 | Assignment | A send that needs no acceptance: a manager's to someone beneath them, or a workflow move |
-| Suggestion | A send an assistant drafted, for an owner to make with one click |
+| Draft | An action an assistant proposed for its person, such as a send, waiting for them to confirm. See [ontology.md](ontology.md) |
 | Inbox | The offers waiting for a member's answer |
 | Shared list | A named group of items and the members who manage them |
 | Workflow | A list's route for its items: stages, each with holders. See [`workflows.md`](workflows.md) |
@@ -98,7 +98,7 @@ stateDiagram-v2
   pending --> expired: Held a departed owner's item for 14 days
 ```
 
-**Suggest.** An assistant can't send, so it suggests: `suggest_to` on `work_create`, or `work_suggest` on an item the person owns. A suggestion gets the same org checks as a send, only owners see it, and the person sends it with one click from the task or Home.
+**Draft.** An assistant acting for a person reads and drafts, and only the person sends. It drafts through the [ontology](ontology.md): `work_propose` of `work_item.send`, `.comment`, `.edit` and the rest, which wait for the person in Workbench's "For you to confirm" and on the task's page. A task of the person's own it may make with `work_act`, and the person can undo it for a day, until someone else is on it.
 
 **Manage together.** Any owner adds collaborators, who can edit and comment. Every member of a list can see and edit its items. A list item can have no owner, and any member can claim it, which gives a team a shared backlog. An owner can put an item made elsewhere, such as from a conversation, on a list they're on, or take it off.
 
@@ -128,7 +128,8 @@ flowchart TB
 | Package | Owns |
 | --- | --- |
 | `workitems` | Items, status, owners, collaborators, comments, links, which list an item is on |
-| `offers` | Sending, accepting, declining, withdrawing, suggestions, workflow moves |
+| `offers` | Sending, accepting, declining, withdrawing, workflow moves |
+| `ontology` | The [ontology](ontology.md): tasks, lists, comments and offers as objects, and actions over these services |
 | `lists` | Shared lists, members, unit links, workflows and who holds stages |
 | `policy` | Every access rule, tenant settings, and the SQL filter for "items this caller can see" |
 | `activity` | History, notifications, mentions, and writing the outbox |
@@ -198,7 +199,7 @@ Foreign keys include `tenant_id`, so cross-tenant links are impossible. User IDs
 
 | Table | Holds |
 | --- | --- |
-| `work_items` | Title, description, status, priority, due date, creator, `list_id`, `stage`, `rounds`, `version`, `client_ref`, suggestion, soft delete, departure queue |
+| `work_items` | Title, description, status, priority, due date, creator, `list_id`, `stage`, `rounds`, `version`, `client_ref`, soft delete, departure queue |
 | `work_item_owners`, `work_item_collaborators` | Who owns and who works on an item. An item off a list always has an owner |
 | `work_item_links` | Up to 20 links per item |
 | `offers` | Sends: `transfer` or `share`, `pending`, `assigned`, `accepted`, `declined`, `withdrawn`, `voided`, `expired` |
@@ -207,6 +208,8 @@ Foreign keys include `tenant_id`, so cross-tenant links are impossible. User IDs
 | `agent_intake` | Who may send each agent account work |
 | `comments`, `events`, `notifications`, `outbox` | Comments; the append-only history and audit trail; one row per member to tell; events for automations |
 | `tenant_settings` | Manager visibility |
+| `ontology_proposals`, `ontology_undo`, `ontology_replays` | The ontology's drafts, undo entries and idempotent answers, from t10-modkit |
+| `type_revision` | Counts changes to item types, as the ontology's tenant-layer revision |
 
 **Writes.** A change, its event, its notifications and its outbox rows commit in one transaction. Each item has a `version`, and a stale write gets `409 version_conflict`. Accepting runs `UPDATE … WHERE state = 'pending'`, every change to an item's owners first locks its row, and a `client_ref` makes a retried create return the first item.
 
@@ -216,7 +219,7 @@ Every route needs a bearer token and every list read is paginated. [`openapi.yam
 
 | Area | Routes |
 | --- | --- |
-| Items | `POST`, `GET /v1/work-items` (`view=owned`, `claimable`, `sent`, `collaborating`, `list`, `reports`; `q`, `status`, due range); `GET`, `PATCH`, `DELETE /v1/work-items/{id}`; `/events`; `/claim`; `/owners/me`; `/collaborators/{user}`; `/comments`; `/links`; `PUT /list`; `DELETE /suggestion` |
+| Items | `POST`, `GET /v1/work-items` (`view=owned`, `claimable`, `sent`, `collaborating`, `list`, `reports`; `q`, `status`, due range); `GET`, `PATCH`, `DELETE /v1/work-items/{id}`; `/events`; `/claim`; `/owners/me`; `/collaborators/{user}`; `/comments`; `/links`; `PUT /list` |
 | Sending | `POST /v1/work-items/{id}/send`; `GET /v1/offers?box=inbox\|sent`; `POST /v1/offers/{id}/accept\|decline\|withdraw` |
 | Lists | `GET`, `POST /v1/lists`; `GET`, `PATCH /v1/lists/{id}`; `PUT`, `DELETE /v1/lists/{id}/members/{user}`; `PUT`, `DELETE /v1/lists/{id}/holding` |
 | Workflows | `PUT`, `DELETE /v1/lists/{id}/workflow`; `POST /v1/work-items/{id}/stage\|advance` |
@@ -224,7 +227,8 @@ Every route needs a bearer token and every list read is paginated. [`openapi.yam
 | Notifications | `GET /v1/notifications?after=`, `POST /v1/notifications/read` |
 | Settings and admin | `GET /v1/settings`, `PUT /v1/admin/settings`; departures queue under `/v1/admin/departures`; `GET`, `PUT /v1/admin/agents/{user}/intake`; `GET /v1/admin/intake-lists` |
 | Module | `GET /v1/module` (manifest), `GET /internal/v1/attention` (service token only) |
-| Agents | `POST /mcp`: `work_list`, `work_get`, `work_comments`, `work_history`, `work_offers`, `work_lists`, `work_people`, `work_create`, `work_suggest`, `work_update`, `work_comment`, `work_link`, and for agent teammates only `work_send`, `work_advance`, `work_accept`, `work_decline`, `work_claim` |
+| Ontology | The contract's routes: `/v1/ontology`, `/v1/objects/…`, `/v1/actions/…`, `/v1/undo/{id}`, `/v1/proposals…`. See [ontology.md](ontology.md) |
+| Agents | `POST /mcp`: the generated `work_describe`, `work_search`, `work_get`, `work_propose`, `work_act`, with `work_people` and `work_history`; and for agent teammates only `work_workflow`, `work_create`, `work_update`, `work_comment`, `work_link`, `work_send`, `work_advance`, `work_transition`, `work_accept`, `work_decline`, `work_claim` |
 
 Clients poll notifications about every 30 seconds. Polling needs no broker, and SSE can be added later without changing the data.
 
@@ -281,7 +285,7 @@ t10 is meant to work as one system: one frame, one sign-in, one bell and search 
 
 - **Oct 31, 2026:** designed as an API with no client, with these prerequisites in `auth-server`, all since built: a member list for services, display names on org reads and at registration, nearest active manager links, keeping a departed manager in the admin form, registering the `t10-collab` service account, and a copied verifier.
 - **Rollout:** auth prerequisites; core items, offers, comments, history and notifications; collaborators, lists and claiming; departures, settings, manager visibility and team-linked lists; agents on `/mcp`, read and draft only.
-- **Nov 2026:** Workbench's Tasks and lists screens; agent teammates, intake and the outbox (`t10-agent-control/docs/tenant-agents.md`, step T2); suggestions and where an item stands; links for external teammates; list workflows; holders who agree; items moved onto lists; search.
+- **Nov 2026:** Workbench's Tasks and lists screens; agent teammates, intake and the outbox (`t10-agent-control/docs/tenant-agents.md`, step T2); where an item stands; links for external teammates; list workflows; holders who agree; items moved onto lists; search. Collab then served the ontology, its assistants' tools became the generated ones, and drafts replaced suggestions (workspace change `adopt-ontology-collab`).
 
 **Alternatives considered**
 

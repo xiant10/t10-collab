@@ -18,6 +18,11 @@ const (
 	ActionWrite  = "work:write"
 	ActionDelete = "work:delete"
 	ActionSend   = "work:send"
+	// An assistant acting for a person holds these with work:read, for the
+	// ontology's generated tools: work_propose drafts and work_act makes a task
+	// the person can undo.
+	ActionPropose = "work:propose"
+	ActionAct     = "work:act"
 )
 
 var (
@@ -96,6 +101,19 @@ func VisibleSQL(tenant, user string) string {
 	))`, tenant, user)
 }
 
+// TiesSQL is a LATERAL subquery, on work_items alias i, of how the caller stands
+// to each item: tie_creator, tie_owner, tie_collaborator, tie_recipient,
+// tie_list_member and tie_unowned, as RelationTo reads them for one item. With
+// VisibleSQL and RelationTo it must change together.
+func TiesSQL(user string) string {
+	return fmt.Sprintf(`(SELECT i.creator_id = %[1]s AS tie_creator,
+		EXISTS (SELECT 1 FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id AND o.user_id = %[1]s) AS tie_owner,
+		EXISTS (SELECT 1 FROM collab.work_item_collaborators c WHERE c.tenant_id = i.tenant_id AND c.item_id = i.id AND c.user_id = %[1]s) AS tie_collaborator,
+		EXISTS (SELECT 1 FROM collab.offers f WHERE f.tenant_id = i.tenant_id AND f.item_id = i.id AND f.to_user_id = %[1]s AND f.state = 'pending') AS tie_recipient,
+		EXISTS (SELECT 1 FROM collab.list_members m WHERE m.tenant_id = i.tenant_id AND m.list_id = i.list_id AND m.user_id = %[1]s) AS tie_list_member,
+		NOT EXISTS (SELECT 1 FROM collab.work_item_owners o WHERE o.tenant_id = i.tenant_id AND o.item_id = i.id) AS tie_unowned)`, user)
+}
+
 // Querier reads from the pool or from inside a transaction.
 type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -116,6 +134,42 @@ func RelationTo(ctx context.Context, q Querier, c Caller, itemID, creatorID, lis
 	}
 	return r, nil
 }
+
+// Ties of a caller to an item, strongest first: an item's relation for its
+// caller is the first that holds, and TieManager when none does and they read
+// it only as a manager of an owner.
+const (
+	TieOwner        = "owner"
+	TieCreator      = "creator"
+	TieCollaborator = "collaborator"
+	TieRecipient    = "recipient"
+	TieListMember   = "list_member"
+	TieManager      = "manager"
+)
+
+// Ties lists them, strongest first.
+var Ties = []string{TieOwner, TieCreator, TieCollaborator, TieRecipient, TieListMember, TieManager}
+
+// Tie is the caller's strongest tie: TieManager for a manager's read.
+func (r Relation) Tie() string {
+	switch {
+	case r.Owner:
+		return TieOwner
+	case r.Creator:
+		return TieCreator
+	case r.Collaborator:
+		return TieCollaborator
+	case r.Recipient:
+		return TieRecipient
+	case r.ListMember:
+		return TieListMember
+	}
+	return TieManager
+}
+
+// TieSQL is Tie in SQL, over TiesSQL's columns.
+const TieSQL = `CASE WHEN tie_owner THEN 'owner' WHEN tie_creator THEN 'creator' WHEN tie_collaborator THEN 'collaborator'
+	WHEN tie_recipient THEN 'recipient' WHEN tie_list_member THEN 'list_member' ELSE 'manager' END`
 
 // CanRead covers reading and commenting. Declining ends access, because a
 // recipient is a Recipient only while the offer is pending.

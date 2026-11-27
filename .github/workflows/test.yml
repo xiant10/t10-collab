@@ -31,4 +31,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The ontology conformance suite (third_party/ontology-conformance) is
+      # TypeScript that Node runs as it is.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - run: make ci

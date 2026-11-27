@@ -242,6 +242,120 @@ paths:
                 properties:
                   types: {type: array, items: {$ref: "#/components/schemas/Type"}}
         default: {$ref: "#/components/responses/Error"}
+  # The ontology contract's routes (the workspace's contracts/ontology/README.md),
+  # served by t10-modkit's ontology package over collab's objects and actions
+  # (docs/ontology.md). Their bodies and error codes are the contract's.
+  /v1/ontology:
+    get:
+      summary: The ontology descriptor, with this tenant's layer
+      description: Takes a person's token, or an agent's acting for one.
+      operationId: getOntology
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/objects/{type}/{id}:
+    parameters:
+      - {name: type, in: path, required: true, schema: {type: string, enum: [work_item, list, comment, offer]}}
+      - {$ref: "#/components/parameters/id"}
+    get:
+      summary: One object the caller may read, with the actions on it
+      operationId: getObject
+      parameters:
+        - {name: sources, in: query, schema: {type: string}}
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/objects/{type}/search:
+    parameters:
+      - {name: type, in: path, required: true, schema: {type: string, enum: [work_item, list, comment, offer]}}
+    post:
+      summary: Search one object type under collab's access policy
+      description: The filter, sort, limit and cursor are the contract's. relation filters a work item by the caller's tie to it, such as owner.
+      operationId: searchObjects
+      requestBody: {$ref: "#/components/requestBodies/Ontology"}
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/objects/{type}/{id}/links/{link}:
+    parameters:
+      - {name: type, in: path, required: true, schema: {type: string}}
+      - {$ref: "#/components/parameters/id"}
+      - {name: link, in: path, required: true, schema: {type: string}}
+    get:
+      summary: A page of one object's link
+      operationId: followLink
+      parameters:
+        - {$ref: "#/components/parameters/limit"}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/objects/resolve:
+    post:
+      summary: The titles of references the caller may read, leaving out the rest
+      operationId: resolveObjects
+      requestBody: {$ref: "#/components/requestBodies/Ontology"}
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/actions/{action}/validate:
+    parameters:
+      - {name: action, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Check an action without taking it
+      operationId: validateAction
+      requestBody: {$ref: "#/components/requestBodies/Ontology"}
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/actions/{action}/apply:
+    parameters:
+      - {name: action, in: path, required: true, schema: {type: string}}
+    post:
+      summary: Take an action as the person, as its route would
+      operationId: applyAction
+      parameters:
+        - {name: Idempotency-Key, in: header, schema: {type: string}}
+      requestBody: {$ref: "#/components/requestBodies/Ontology"}
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/undo/{id}:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Undo a task an assistant made, within a day and while nobody else is on it
+      operationId: undoAction
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/proposals:
+    get:
+      summary: The caller's open drafts
+      operationId: listProposals
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/proposals/{id}/confirm:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Take a draft as the person, under their rights now
+      description: stale_revision when its object changed since the draft; give the current revision to confirm anyway.
+      operationId: confirmProposal
+      requestBody: {$ref: "#/components/requestBodies/Ontology"}
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/proposals/{id}/dismiss:
+    parameters:
+      - {$ref: "#/components/parameters/id"}
+    post:
+      summary: Close a draft with no other effect
+      operationId: dismissProposal
+      responses:
+        "204": {description: Dismissed}
+        default: {$ref: "#/components/responses/Error"}
   /v1/work-items:
     post:
       summary: Create an item, optionally sending it at once
@@ -597,16 +711,6 @@ paths:
                 note: {type: string, maxLength: 2000}
       responses:
         "200": {$ref: "#/components/responses/Item"}
-        default: {$ref: "#/components/responses/Error"}
-  /v1/work-items/{id}/suggestion:
-    parameters:
-      - {$ref: "#/components/parameters/id"}
-    delete:
-      summary: Dismiss a suggested send
-      description: For someone who could make the send. An assistant suggests one with the work_suggest tool, or suggest_to on work_create, because only a person sends.
-      operationId: dismissSuggestion
-      responses:
-        "204": {description: Dismissed, or there was none}
         default: {$ref: "#/components/responses/Error"}
   /v1/offers:
     get:
@@ -1032,7 +1136,18 @@ components:
     id: {name: id, in: path, required: true, schema: {type: string}}
     limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
     cursor: {name: cursor, in: query, schema: {type: string}}
+  requestBodies:
+    Ontology:
+      description: The ontology contract's body for this route
+      content:
+        application/json:
+          schema: {type: object}
   responses:
+    Ontology:
+      description: The ontology contract's answer for this route
+      content:
+        application/json:
+          schema: {type: object}
     Item:
       description: The item
       content:
@@ -1287,13 +1402,6 @@ components:
         collaborators: {type: array, items: {type: string}}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
-        suggestion:
-          type: object
-          description: A send an assistant suggested, for an owner to make. Only owners are shown it, and any send clears it
-          properties:
-            to: {type: string}
-            note: {type: string}
-            at: {type: string, format: date-time}
         links: {type: array, items: {$ref: "#/components/schemas/Link"}}
         stage: {type: string, description: Its stage on its list's workflow; left out off it}
         rounds: {type: integer, description: Times it went back since it was started or put at a stage}

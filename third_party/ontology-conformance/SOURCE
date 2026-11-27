@@ -1,0 +1,1 @@
+contracts/ontology/ at the t10 workspace's commit 0e680e51e4baca17c9e9c38dec2082d5ff285323 (2026-11-27): conformance.ts, descriptor.ts, descriptor.schema.json and interfaces.json, copied unchanged. internal/server/conformance_test.go runs conformance.ts against collab in make ci; the workspace's make check compares this copy.

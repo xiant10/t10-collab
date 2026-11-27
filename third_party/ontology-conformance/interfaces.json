@@ -1,0 +1,6 @@
+{
+  "t10:Assignable": { "properties": { "assignee": { "type": "ref", "to": "auth:user" } } },
+  "t10:HasDeadline": { "properties": { "deadline": { "type": "timestamp" } } },
+  "t10:Person": { "properties": { "name": { "type": "string" } } },
+  "t10:Commentable": { "properties": { "comment_count": { "type": "integer" } } }
+}

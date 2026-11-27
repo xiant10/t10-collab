@@ -99,16 +99,27 @@ func toolNames(t *testing.T, url, token string) []string {
 func TestOnlyATeammateSendsThroughTools(t *testing.T) {
 	h := newHarness(t)
 	ts := h.teammateServer()
-	// A harness's catalog, listed with no token, has every tool; a person's
-	// assistant's list doesn't.
-	for token, want := range map[string]bool{"": true, "agent-write": false, "teammate:acc_lead": true} {
-		if got := slices.Contains(toolNames(t, ts.URL, token), "work_send"); got != want {
-			t.Errorf("token %q lists work_send: %v", token, got)
+	// The list is the same for everyone, as the ontology contract has it:
+	// the generated tools, two of collab's own, and a teammate's, which say so.
+	names := toolNames(t, ts.URL, "")
+	for _, token := range []string{"agent-assistant", "teammate:acc_lead"} {
+		if got := toolNames(t, ts.URL, token); !slices.Equal(got, names) {
+			t.Errorf("token %q lists %v, not %v", token, got, names)
+		}
+	}
+	for _, name := range []string{"work_describe", "work_search", "work_get", "work_propose", "work_act", "work_people", "work_history", "work_send", "work_comment"} {
+		if !slices.Contains(names, name) {
+			t.Errorf("no %s in %v", name, names)
+		}
+	}
+	for _, gone := range []string{"work_list", "work_lists", "work_comments", "work_offers", "work_suggest"} {
+		if slices.Contains(names, gone) {
+			t.Errorf("%s is still listed", gone)
 		}
 	}
 	item := h.item("ada")
 	// An assistant acting for ada still only drafts.
-	if r := call(t, ts.URL, "agent-write", "work_send", map[string]any{"id": item, "to": "bob", "note": "yours"}); !r.failed || !strings.Contains(r.text, "drafts") {
+	if r := call(t, ts.URL, "agent-assistant", "work_send", map[string]any{"id": item, "to": "bob", "note": "yours"}); !r.failed || !strings.Contains(r.text, "work_propose") {
 		t.Errorf("an assistant sent: %+v", r)
 	}
 }

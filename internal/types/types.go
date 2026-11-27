@@ -538,9 +538,28 @@ func (s *Store) Put(ctx context.Context, service string, d Definition) (Type, er
 			return fmt.Errorf("write type: %w", err)
 		}
 		t.Definition = d
-		return nil
+		return bump(ctx, tx)
 	})
 	return t, err
+}
+
+// bump counts a change to a type or a tenant's version of one, in its
+// transaction. The count is the ontology's tenant-layer revision (Revision).
+func bump(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, "UPDATE collab.type_revision SET revision = revision + 1"); err != nil {
+		return fmt.Errorf("count type change: %w", err)
+	}
+	return nil
+}
+
+// Revision is the count of changes to every type and tenant version. It only
+// grows, so a client that cached the types it read knows when to read again.
+func (s *Store) Revision(ctx context.Context) (int64, error) {
+	var n int64
+	if err := s.pool.QueryRow(ctx, "SELECT revision FROM collab.type_revision").Scan(&n); err != nil {
+		return 0, fmt.Errorf("read type revision: %w", err)
+	}
+	return n, nil
 }
 
 func equalJSON(a, b Definition) bool {

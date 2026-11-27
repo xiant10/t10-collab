@@ -271,5 +271,5 @@ func (s *Service) Transition(ctx context.Context, c policy.Caller, id string, re
 	if err != nil {
 		return Item{}, err
 	}
-	return item.ForReader(c.UserID), nil
+	return item, nil
 }
