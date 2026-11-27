@@ -139,6 +139,17 @@ func decodeArgs(raw json.RawMessage, into any) error {
 	return nil
 }
 
+// required refuses arguments that leave out what the tool's schema requires, as invalid_arguments,
+// the same as a module's own tools.
+func required(fields map[string]string) error {
+	for _, name := range sortedKeys(fields) {
+		if fields[name] == "" {
+			return Fail(http.StatusBadRequest, "invalid_arguments", name+" is required")
+		}
+	}
+	return nil
+}
+
 func asAgent(ctx context.Context) context.Context { return context.WithValue(ctx, agentKey{}, true) }
 
 func (r *Registry[C]) toolDescribe(ctx context.Context, c C, _ string, args json.RawMessage) map[string]any {
@@ -171,6 +182,9 @@ func (r *Registry[C]) toolSearch(ctx context.Context, c C, _ string, args json.R
 	if err := decodeArgs(args, &a); err != nil {
 		return toolFailure(err)
 	}
+	if err := required(map[string]string{"type": a.Type}); err != nil {
+		return toolFailure(err)
+	}
 	body := map[string]any{"cursor": a.Cursor}
 	if len(a.Filter) > 0 {
 		body["filter"] = a.Filter
@@ -197,6 +211,9 @@ func (r *Registry[C]) toolGet(ctx context.Context, c C, _ string, args json.RawM
 	if err := decodeArgs(args, &a); err != nil {
 		return toolFailure(err)
 	}
+	if err := required(map[string]string{"ref": a.Ref}); err != nil {
+		return toolFailure(err)
+	}
 	module, objectType, id, ok := SplitRef(a.Ref)
 	if !ok || module != r.opts.Module {
 		return toolFailure(ErrNotFound)
@@ -215,6 +232,9 @@ func (r *Registry[C]) toolPropose(ctx context.Context, c C, agent string, args j
 		Params json.RawMessage `json:"params"`
 	}
 	if err := decodeArgs(args, &a); err != nil {
+		return toolFailure(err)
+	}
+	if err := required(map[string]string{"action": a.Action}); err != nil {
 		return toolFailure(err)
 	}
 	p, errs, err := r.Propose(asAgent(ctx), c, agent, a.Action, ActionRequest{Object: a.Object, Params: a.Params})
@@ -236,6 +256,9 @@ func (r *Registry[C]) toolAct(ctx context.Context, c C, agent string, args json.
 		RequestID string          `json:"request_id"`
 	}
 	if err := decodeArgs(args, &a); err != nil {
+		return toolFailure(err)
+	}
+	if err := required(map[string]string{"action": a.Action, "request_id": a.RequestID}); err != nil {
 		return toolFailure(err)
 	}
 	action, ok := r.actions[a.Action]
