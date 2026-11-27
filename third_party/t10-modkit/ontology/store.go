@@ -19,7 +19,10 @@ type Proposal struct {
 	Agent  string
 	Action string
 	// Object is the reference acted on, empty for a create.
-	Object    string
+	Object string
+	// Revision is the object's revision when the draft was made, so a confirm
+	// after it changed is refused; 0 for a create, or a draft kept from before.
+	Revision  int64
 	Params    json.RawMessage
 	State     string // open, confirmed or dismissed
 	CreatedAt time.Time
@@ -51,10 +54,15 @@ type UndoEntry struct {
 	Payload   json.RawMessage
 	CreatedAt time.Time
 	ExpiresAt time.Time
-	Undone    bool
+	// Undone is set when an undo starts, and Reverted once its compensating
+	// change is written. Undone without Reverted is an undo still running, or one
+	// that was interrupted, which the person can run again.
+	Undone   bool
+	Reverted bool
 }
 
-// Replay is an idempotent action's answer, kept under its key.
+// Replay is an idempotent action's answer, kept under its key. Action is the
+// scope the key is kept under, the whole module ("*") since v0.3.0.
 type Replay struct {
 	Tenant, User, Action, Key string
 	// Hash is the request body's, so the same key with another body is refused.
@@ -69,9 +77,11 @@ type UndoStore interface {
 	SaveUndo(ctx context.Context, u UndoEntry) error
 	// GetUndo is an entry by ID within the tenant, or ErrNotFound.
 	GetUndo(ctx context.Context, tenant, id string) (UndoEntry, error)
-	// SetUndone marks an entry undone or not, and answers ErrUndone when
+	// SetUndone marks an entry's undo started or not, and answers ErrUndone when
 	// marking one that already is.
 	SetUndone(ctx context.Context, tenant, id string, undone bool) error
+	// FinishUndo marks an entry reverted: its undo is done.
+	FinishUndo(ctx context.Context, tenant, id string) error
 	// GetReplay is what is kept under a key, and whether there is anything.
 	GetReplay(ctx context.Context, tenant, user, action, key string) (Replay, bool, error)
 	// ReserveReplay claims a key, with r.Hash and no answer, before the action

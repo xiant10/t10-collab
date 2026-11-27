@@ -6,7 +6,8 @@
 //	go run ./ontology/testdata/ledgermod/stub -addr 127.0.0.1:18300 [-break scope]
 //
 // Its tokens are ledgermod's: person:t1:rep1 sees building 12, person:t1:rep2
-// building 3, and agent:t1:rep1 is a delegated token.
+// building 3, and agent:t1:rep1 is a delegated token for rep1 whose grant holds
+// sales:read, sales:propose and sales:act; agent:t1:rep1:read holds sales:read only.
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -29,7 +31,8 @@ import (
 
 // The rules -break can break, each caught by one of the suite's checks.
 var breaks = []string{"scope", "paging", "hidden", "unknown-type", "resolve", "delegated", "forbidden", "wrong-state", "stale",
-	"replay", "undo-owner", "undo-conflict", "tier", "undoable", "tenant-action", "label", "events", "interface"}
+	"replay", "undo-owner", "undo-conflict", "tier", "undoable", "tenant-action", "label", "events", "interface",
+	"tools-tenant", "agent-never", "agent-mask", "agent-filter", "agent-grant", "agent-data"}
 
 type order struct {
 	ID, Building, State, Summary string
@@ -52,6 +55,7 @@ func main() {
 	rep := ledgermod.Rep("t1", "rep1")
 	account := m.AddAccount(rep, "Example Works")
 	m.AddDeal(rep, account, "Line 2 upgrade", 1_000_00, "")
+	m.AddStakeholder(rep, account, "Wang", "13800000000", map[string]string{"F": "two children"})
 	m.AddDeal(ledgermod.Rep("t1", "rep2"), m.AddAccount(ledgermod.Rep("t1", "rep2"), "Rival"), "Hidden", 1, "")
 
 	// 40 overdue work orders, 3 of them in building 12, and one completed there.
@@ -149,6 +153,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(manifest)
 	})
+	mux.Handle("POST /mcp", tools(m.Registry, *broken))
 	log.Printf("ontology stub on %s, break %q", *addr, *broken)
 	log.Fatal(http.ListenAndServe(*addr, breaking(*broken, mux)))
 }
@@ -238,5 +243,107 @@ func breaking(rule string, next http.Handler) http.Handler {
 		w.Header().Del("Content-Length")
 		w.WriteHeader(status)
 		w.Write(bytes.TrimSpace(body))
+	})
+}
+
+// tools serves the generated tools over MCP as a module does: listing needs no
+// token, and a call needs a delegated token whose grant holds the tool's action.
+// The agent- and tools- rules break what the tools promise an agent.
+func tools(reg *ontology.Registry[ledgermod.Caller], rule string) http.Handler {
+	reply := func(w http.ResponseWriter, status int, v any) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(v)
+	}
+	asData := func(v any, err error) map[string]any {
+		if err != nil {
+			e := &ontology.Error{}
+			if !errors.As(err, &e) {
+				e = ontology.Fail(500, "unavailable", "")
+			}
+			return map[string]any{"isError": true, "content": []map[string]any{{"type": "text", "text": e.Code}}}
+		}
+		encoded, _ := json.Marshal(v)
+		return map[string]any{"content": []map[string]any{{"type": "text", "text": "<module_record module=\"sales\">\n" + string(encoded) + "\n</module_record>"}}}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"params"`
+		}
+		if json.NewDecoder(r.Body).Decode(&msg) != nil {
+			reply(w, 400, map[string]any{"error": "invalid_request"})
+			return
+		}
+		generated := reg.Tools()
+		switch msg.Method {
+		case "tools/list":
+			listed := []map[string]any{}
+			for _, t := range generated {
+				description := t.Description
+				if rule == "tools-tenant" && r.Header.Get("Authorization") != "" {
+					description += " For Example Works."
+				}
+				listed = append(listed, map[string]any{"name": t.Name, "description": description, "inputSchema": t.InputSchema})
+			}
+			reply(w, 200, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"tools": listed}})
+			return
+		case "tools/call":
+		default:
+			reply(w, 200, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32601, "message": "unknown method"}})
+			return
+		}
+		i := slices.IndexFunc(generated, func(t ontology.Tool[ledgermod.Caller]) bool { return t.Name == msg.Params.Name })
+		c, token, err := ledgermod.Authenticate(r)
+		if err != nil || token != ontology.DelegatedToken {
+			reply(w, 401, map[string]any{"error": "unauthorized"})
+			return
+		}
+		if i < 0 {
+			reply(w, 200, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "error": map[string]any{"code": -32602, "message": "unknown tool"}})
+			return
+		}
+		t := generated[i]
+		grant := []string{"sales:read", "sales:propose", "sales:act"}
+		if strings.HasSuffix(r.Header.Get("Authorization"), ":read") {
+			grant = []string{"sales:read"}
+		}
+		if !slices.Contains(grant, t.Action) && rule != "agent-grant" {
+			reply(w, 403, map[string]any{"error": "forbidden"})
+			return
+		}
+		ctx := r.Context()
+		args := map[string]json.RawMessage{}
+		_ = json.Unmarshal(msg.Params.Arguments, &args)
+		var result map[string]any
+		switch {
+		case rule == "agent-never" && t.Name == "sales_describe":
+			result = asData(reg.Describe(ctx, c))
+		case rule == "agent-mask" && t.Name == "sales_get":
+			var ref string
+			_ = json.Unmarshal(args["ref"], &ref)
+			_, objectType, id, _ := ontology.SplitRef(ref)
+			result = asData(reg.GetObject(ctx, c, objectType, id, ""))
+		case rule == "agent-filter" && t.Name == "sales_search":
+			var objectType string
+			_ = json.Unmarshal(args["type"], &objectType)
+			delete(args, "type")
+			body, _ := json.Marshal(args)
+			result = asData(reg.Search(ctx, c, objectType, body))
+		default:
+			result = t.Run(ctx, c, "conformance", msg.Params.Arguments)
+		}
+		if rule == "agent-data" {
+			for _, part := range result["content"].([]map[string]any) {
+				text := part["text"].(string)
+				text = strings.TrimPrefix(text, "<module_record module=\"sales\">\n")
+				part["text"] = strings.TrimSuffix(text, "\n</module_record>")
+			}
+		}
+		reply(w, 200, map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": result})
 	})
 }

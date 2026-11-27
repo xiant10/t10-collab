@@ -182,7 +182,9 @@ type ActionType[C, R any] struct {
 	// again, the change, its audit and side effects in one transaction.
 	Apply func(ctx context.Context, c C, r R, in Input) (Result, error)
 	// Revert writes the compensating change for an undo, naming the original,
-	// and ErrUndoConflict when a later change depends on it.
+	// and ErrUndoConflict when a later change depends on it. It writes it at most
+	// once per Undoing.ID, and answers ErrUndone when it already has, because an
+	// undo that was interrupted runs it again.
 	Revert func(ctx context.Context, c C, u Undoing) (Result, error)
 }
 

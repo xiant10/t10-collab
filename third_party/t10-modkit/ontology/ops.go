@@ -80,6 +80,7 @@ type ProposalAnswer struct {
 	ID        string          `json:"id"`
 	Action    string          `json:"action"`
 	Object    string          `json:"object,omitempty"`
+	Revision  int64           `json:"revision,omitempty"`
 	Params    json.RawMessage `json:"params"`
 	Agent     string          `json:"agent"`
 	CreatedAt time.Time       `json:"created_at"`
@@ -450,6 +451,10 @@ func requestHash(name string, req ActionRequest, params map[string]any) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// replayScope is the action every key is kept under: a key covers the module,
+// not one action, so the same key on another action is idempotency_conflict.
+const replayScope = "*"
+
 // Apply runs an action for the caller. via is person, agent or proposal.
 func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionRequest, in Input) (ApplyAnswer, error) {
 	a, ok := r.actions[name]
@@ -458,7 +463,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	}
 	who := r.opts.Who(c)
 	if ok && a.info.Idempotent {
-		kept, found, err := r.opts.Undo.GetReplay(ctx, who.Tenant, who.User, name, in.IdempotencyKey)
+		kept, found, err := r.opts.Undo.GetReplay(ctx, who.Tenant, who.User, replayScope, in.IdempotencyKey)
 		if err != nil {
 			return ApplyAnswer{}, r.asError(err)
 		}
@@ -478,7 +483,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	// The key is claimed before the action runs, so a retry that arrives while
 	// this one is still running can't apply it a second time.
 	if a.info.Idempotent {
-		kept, reserved, err := r.opts.Undo.ReserveReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: name, Key: in.IdempotencyKey, Hash: hash})
+		kept, reserved, err := r.opts.Undo.ReserveReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: replayScope, Key: in.IdempotencyKey, Hash: hash})
 		if err != nil {
 			return ApplyAnswer{}, r.asError(err)
 		}
@@ -490,7 +495,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	if err != nil {
 		// Nothing changed, so the key is free for a retry.
 		if a.info.Idempotent {
-			_ = r.opts.Undo.ReleaseReplay(context.WithoutCancel(ctx), who.Tenant, who.User, name, in.IdempotencyKey)
+			_ = r.opts.Undo.ReleaseReplay(context.WithoutCancel(ctx), who.Tenant, who.User, replayScope, in.IdempotencyKey)
 		}
 		return ApplyAnswer{}, r.asError(err)
 	}
@@ -515,7 +520,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	}
 	if a.info.Idempotent {
 		encoded, _ := json.Marshal(out)
-		if err := r.opts.Undo.FinishReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: name, Key: in.IdempotencyKey, Hash: hash, Answer: encoded}); err != nil {
+		if err := r.opts.Undo.FinishReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: replayScope, Key: in.IdempotencyKey, Hash: hash, Answer: encoded}); err != nil {
 			return ApplyAnswer{}, r.asError(err)
 		}
 	}
@@ -546,6 +551,16 @@ func (r *Registry[C]) changed(ctx context.Context, c C, objectType, id string) *
 // again, and refuses the same key with another body.
 func (r *Registry[C]) replay(ctx context.Context, c C, name string, req ActionRequest, kept Replay) (ApplyAnswer, error) {
 	a := r.actions[name]
+	// The body first, since the key may have been used for another action: the
+	// hash names the action, so another one is idempotency_conflict.
+	d, e := r.describe(ctx, c)
+	if e != nil {
+		return ApplyAnswer{}, e
+	}
+	params, _ := decodeParams(req.Params, d.Params(name))
+	if requestHash(name, req, params) != kept.Hash {
+		return ApplyAnswer{}, Fail(http.StatusConflict, "idempotency_conflict", "this key was used with another body")
+	}
 	if !r.opts.Can(c, a.info.Permission) {
 		return ApplyAnswer{}, ErrForbidden
 	}
@@ -554,14 +569,6 @@ func (r *Registry[C]) replay(ctx context.Context, c C, name string, req ActionRe
 		if _, err := r.types[a.info.On].get(ctx, c, id); err != nil || objectType != a.info.On {
 			return ApplyAnswer{}, ErrNotFound
 		}
-	}
-	d, e := r.describe(ctx, c)
-	if e != nil {
-		return ApplyAnswer{}, e
-	}
-	params, _ := decodeParams(req.Params, d.Params(name))
-	if requestHash(name, req, params) != kept.Hash {
-		return ApplyAnswer{}, Fail(http.StatusConflict, "idempotency_conflict", "this key was used with another body")
 	}
 	if kept.Answer == nil {
 		return ApplyAnswer{}, ErrRequestInProgress
@@ -587,18 +594,35 @@ func (r *Registry[C]) Undo(ctx context.Context, c C, id string) (ApplyAnswer, er
 	if !ok || a.revert == nil {
 		return ApplyAnswer{}, ErrNotFound
 	}
-	if entry.Undone {
+	if entry.Reverted {
 		return ApplyAnswer{}, ErrUndone
 	}
-	if !r.opts.Now().Before(entry.ExpiresAt) {
-		return ApplyAnswer{}, Fail(http.StatusConflict, "undo_expired", "the time to undo it has run out")
-	}
-	if err := r.opts.Undo.SetUndone(ctx, who.Tenant, id, true); err != nil {
-		return ApplyAnswer{}, r.asError(err)
+	// An undo that started and never finished (interrupted, or still running) is
+	// run again, past its window too: Revert writes its change at most once.
+	started := false
+	if !entry.Undone {
+		if !r.opts.Now().Before(entry.ExpiresAt) {
+			return ApplyAnswer{}, Fail(http.StatusConflict, "undo_expired", "the time to undo it has run out")
+		}
+		err := r.opts.Undo.SetUndone(ctx, who.Tenant, id, true)
+		if err != nil && !errors.Is(err, ErrUndone) {
+			return ApplyAnswer{}, r.asError(err)
+		}
+		started = err == nil
 	}
 	res, err := a.revert(ctx, c, Undoing{ID: entry.ID, Object: entry.Object, Payload: entry.Payload})
+	if errors.Is(err, ErrUndone) {
+		// Its change was written before: the undo is done.
+		_ = r.opts.Undo.FinishUndo(context.WithoutCancel(ctx), who.Tenant, id)
+		return ApplyAnswer{}, ErrUndone
+	}
 	if err != nil {
-		_ = r.opts.Undo.SetUndone(context.WithoutCancel(ctx), who.Tenant, id, false)
+		if started {
+			_ = r.opts.Undo.SetUndone(context.WithoutCancel(ctx), who.Tenant, id, false)
+		}
+		return ApplyAnswer{}, r.asError(err)
+	}
+	if err := r.opts.Undo.FinishUndo(ctx, who.Tenant, id); err != nil {
 		return ApplyAnswer{}, r.asError(err)
 	}
 	_, objectType, objectID, _ := SplitRef(entry.Object)
@@ -632,7 +656,7 @@ func (r *Registry[C]) Propose(ctx context.Context, c C, agent, name string, req 
 	who := r.opts.Who(c)
 	now := r.opts.Now()
 	draft := Proposal{ID: ids.New("proposal"), Tenant: who.Tenant, User: who.User, Agent: agent, Action: name, Object: req.Object,
-		Params: params, State: "open", CreatedAt: now, ExpiresAt: now.Add(ProposalLife)}
+		Revision: p.current, Params: params, State: "open", CreatedAt: now, ExpiresAt: now.Add(ProposalLife)}
 	if err := r.opts.Proposals.CreateProposal(ctx, draft, ProposalLimit, now); err != nil {
 		return Proposal{}, nil, r.asError(err)
 	}
@@ -651,13 +675,15 @@ func (r *Registry[C]) Proposals(ctx context.Context, c C) ([]ProposalAnswer, err
 		return nil, r.asError(err)
 	}
 	for _, p := range list {
-		out = append(out, ProposalAnswer{ID: p.ID, Action: p.Action, Object: p.Object, Params: p.Params, Agent: p.Agent, CreatedAt: p.CreatedAt, ExpiresAt: p.ExpiresAt})
+		out = append(out, ProposalAnswer{ID: p.ID, Action: p.Action, Object: p.Object, Revision: p.Revision, Params: p.Params, Agent: p.Agent, CreatedAt: p.CreatedAt, ExpiresAt: p.ExpiresAt})
 	}
 	return out, nil
 }
 
 // ConfirmRequest is a confirm's body: edited params replace the draft's, and
-// revision, when given, is the one the person saw.
+// revision, when given, is the one the person saw. Without it the draft's own
+// revision is compared, so a draft whose object changed since is refused with
+// stale_revision and stays open, for the person to review again.
 type ConfirmRequest struct {
 	Params   json.RawMessage `json:"params,omitempty"`
 	Revision int64           `json:"revision,omitempty"`
@@ -700,6 +726,10 @@ func (r *Registry[C]) Confirm(ctx context.Context, c C, id string, body ConfirmR
 	}
 	merged, _ := json.Marshal(params)
 	req := ActionRequest{Object: p.Object, Revision: body.Revision, Params: merged}
+	if req.Revision == 0 {
+		req.Revision = p.Revision
+	}
+	// A draft kept from before drafts had a revision is confirmed against the current one.
 	if a := r.actions[p.Action]; a != nil && a.info.On != "" && req.Revision == 0 {
 		_, objectType, objectID, _ := SplitRef(p.Object)
 		if t, ok := r.types[objectType]; ok {

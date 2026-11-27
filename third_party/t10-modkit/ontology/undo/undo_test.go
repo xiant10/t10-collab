@@ -68,6 +68,17 @@ func exercise(t *testing.T, s ontology.UndoStore) {
 	if got, _ := s.GetUndo(ctx, "t1", "undo_1"); got.Undone {
 		t.Fatal("a failed undo stays undone")
 	}
+	// Once reverted it is done: it can't be unmarked.
+	if err := s.FinishUndo(ctx, "t1", "undo_1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetUndo(ctx, "t1", "undo_1"); !got.Undone || !got.Reverted {
+		t.Fatalf("finished: %+v", got)
+	}
+	_ = s.SetUndone(ctx, "t1", "undo_1", false)
+	if got, _ := s.GetUndo(ctx, "t1", "undo_1"); !got.Undone || !got.Reverted {
+		t.Fatalf("a finished undo was unmarked: %+v", got)
+	}
 	if err := s.SetUndone(ctx, "t1", "undo_nope", true); !errors.Is(err, ontology.ErrNotFound) {
 		t.Fatalf("an unknown entry: %v", err)
 	}

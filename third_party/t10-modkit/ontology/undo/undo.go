@@ -76,10 +76,23 @@ func (m *Memory) SetUndone(_ context.Context, tenant, id string, undone bool) er
 	if !ok {
 		return ontology.ErrNotFound
 	}
-	if undone && u.Undone {
+	if (undone && u.Undone) || u.Reverted {
 		return ontology.ErrUndone
 	}
 	u.Undone = undone
+	m.entries[tenant+"|"+id] = u
+	return nil
+}
+
+func (m *Memory) FinishUndo(_ context.Context, tenant, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.init()
+	u, ok := m.entries[tenant+"|"+id]
+	if !ok {
+		return ontology.ErrNotFound
+	}
+	u.Undone, u.Reverted = true, true
 	m.entries[tenant+"|"+id] = u
 	return nil
 }
@@ -159,19 +172,28 @@ func (s Postgres) GetUndo(ctx context.Context, tenant, id string) (ontology.Undo
 	var u ontology.UndoEntry
 	var payload []byte
 	var undone *time.Time
-	err := s.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT id,tenant_id,user_id,action,object,payload,created_at,expires_at,undone_at FROM %s.ontology_undo WHERE tenant_id=$1 AND id=$2`, s.Schema), tenant, id).
-		Scan(&u.ID, &u.Tenant, &u.User, &u.Action, &u.Object, &payload, &u.CreatedAt, &u.ExpiresAt, &undone)
+	var reverted *time.Time
+	err := s.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT id,tenant_id,user_id,action,object,payload,created_at,expires_at,undone_at,reverted_at FROM %s.ontology_undo WHERE tenant_id=$1 AND id=$2`, s.Schema), tenant, id).
+		Scan(&u.ID, &u.Tenant, &u.User, &u.Action, &u.Object, &payload, &u.CreatedAt, &u.ExpiresAt, &undone, &reverted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ontology.ErrNotFound
 	}
-	u.Payload, u.Undone = payload, undone != nil
+	u.Payload, u.Undone, u.Reverted = payload, undone != nil, reverted != nil
 	return u, err
+}
+
+func (s Postgres) FinishUndo(ctx context.Context, tenant, id string) error {
+	tag, err := s.Pool.Exec(ctx, fmt.Sprintf(`UPDATE %s.ontology_undo SET undone_at=coalesce(undone_at, clock_timestamp()), reverted_at=coalesce(reverted_at, clock_timestamp()) WHERE tenant_id=$1 AND id=$2`, s.Schema), tenant, id)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ontology.ErrNotFound
+	}
+	return err
 }
 
 func (s Postgres) SetUndone(ctx context.Context, tenant, id string, undone bool) error {
 	query := `UPDATE %s.ontology_undo SET undone_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2 AND undone_at IS NULL`
 	if !undone {
-		query = `UPDATE %s.ontology_undo SET undone_at=NULL WHERE tenant_id=$1 AND id=$2`
+		query = `UPDATE %s.ontology_undo SET undone_at=NULL WHERE tenant_id=$1 AND id=$2 AND reverted_at IS NULL`
 	}
 	tag, err := s.Pool.Exec(ctx, fmt.Sprintf(query, s.Schema), tenant, id)
 	if err != nil {

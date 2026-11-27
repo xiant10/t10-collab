@@ -49,7 +49,7 @@ func exercise(t *testing.T, s ontology.ProposalStore) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
 	draft := func(id, user string, at time.Time) ontology.Proposal {
-		return ontology.Proposal{ID: id, Tenant: "t1", User: user, Agent: "agent:a", Action: "ticket.send", Object: "sales:deal:d1",
+		return ontology.Proposal{ID: id, Tenant: "t1", User: user, Agent: "agent:a", Action: "ticket.send", Object: "sales:deal:d1", Revision: 3,
 			Params: []byte(`{"title":"x"}`), State: "open", CreatedAt: at, ExpiresAt: at.Add(ontology.ProposalLife)}
 	}
 	// An old draft has expired, so it neither lists nor counts toward the limit.
@@ -92,7 +92,7 @@ func exercise(t *testing.T, s ontology.ProposalStore) {
 		t.Fatal(err)
 	}
 	p, err := s.GetProposal(ctx, "t1", "u1", "p_1")
-	if err != nil || p.State != "open" || p.Agent != "agent:a" || p.Object != "sales:deal:d1" {
+	if err != nil || p.State != "open" || p.Agent != "agent:a" || p.Object != "sales:deal:d1" || p.Revision != 3 {
 		t.Fatalf("reopened: %+v %v", p, err)
 	}
 }

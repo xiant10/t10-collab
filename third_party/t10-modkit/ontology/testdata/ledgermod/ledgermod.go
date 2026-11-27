@@ -774,6 +774,12 @@ func (m *Module) declareActions() {
 				return ontology.Result{}, ontology.ErrNotFound
 			}
 			orig := m.records[i]
+			// An interrupted undo runs Revert again: the compensation is written once.
+			for _, r := range m.records {
+				if r.Undoes == orig.ID {
+					return ontology.Result{}, ontology.ErrUndone
+				}
+			}
 			for _, r := range m.records {
 				if r.Because == orig.ID && m.active(r) {
 					return ontology.Result{}, ontology.ErrUndoConflict

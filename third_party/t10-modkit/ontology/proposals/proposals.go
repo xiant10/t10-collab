@@ -133,18 +133,18 @@ func (s Postgres) CreateProposal(ctx context.Context, p ontology.Proposal, limit
 		if open >= limit {
 			return ontology.ErrTooManyProposals
 		}
-		_, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (tenant_id,id,user_id,agent,action,object,params,state,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9)`, s.table()),
-			p.Tenant, p.ID, p.User, p.Agent, p.Action, p.Object, string(p.Params), p.CreatedAt, p.ExpiresAt)
+		_, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %s (tenant_id,id,user_id,agent,action,object,revision,params,state,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10)`, s.table()),
+			p.Tenant, p.ID, p.User, p.Agent, p.Action, p.Object, p.Revision, string(p.Params), p.CreatedAt, p.ExpiresAt)
 		return err
 	})
 }
 
-const columns = `id,tenant_id,user_id,agent,action,object,params,state,created_at,expires_at`
+const columns = `id,tenant_id,user_id,agent,action,object,revision,params,state,created_at,expires_at`
 
 func scan(row pgx.Row) (ontology.Proposal, error) {
 	var p ontology.Proposal
 	var params []byte
-	err := row.Scan(&p.ID, &p.Tenant, &p.User, &p.Agent, &p.Action, &p.Object, &params, &p.State, &p.CreatedAt, &p.ExpiresAt)
+	err := row.Scan(&p.ID, &p.Tenant, &p.User, &p.Agent, &p.Action, &p.Object, &p.Revision, &params, &p.State, &p.CreatedAt, &p.ExpiresAt)
 	p.Params = params
 	return p, err
 }

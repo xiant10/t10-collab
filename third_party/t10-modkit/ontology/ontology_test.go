@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/xiant10/t10-modkit/ontology"
+	"github.com/xiant10/t10-modkit/ontology/proposals"
 	"github.com/xiant10/t10-modkit/ontology/testdata/ledgermod"
 	"github.com/xiant10/t10-modkit/ontology/undo"
 )
@@ -31,6 +32,7 @@ var (
 type world struct {
 	t       *testing.T
 	m       *ledgermod.Module
+	undo    *undo.Memory
 	srv     *httptest.Server
 	clock   *clock
 	rep     ledgermod.Caller
@@ -53,13 +55,14 @@ func (c *clock) add(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.U
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	clk := &clock{now: time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)}
-	m := ledgermod.New(clk.Now)
+	undos := &undo.Memory{}
+	m := ledgermod.NewWith(clk.Now, &proposals.Memory{}, undos)
 	if err := m.Registry.Check(); err != nil {
 		t.Fatal(err)
 	}
 	m.SetPack("t1", pack)
 	m.SetPack("t2", otherPack)
-	w := &world{t: t, m: m, clock: clk, rep: ledgermod.Rep("t1", "rep1"), rival: ledgermod.Rep("t1", "rep2"), manager: ledgermod.Manager("t1", "boss")}
+	w := &world{t: t, m: m, undo: undos, clock: clk, rep: ledgermod.Rep("t1", "rep1"), rival: ledgermod.Rep("t1", "rep2"), manager: ledgermod.Manager("t1", "boss")}
 	w.account = m.AddAccount(w.rep, "Example Works")
 	w.deal = m.AddDeal(w.rep, w.account, "Line 2 upgrade", 120_000_00, "likes early calls")
 	w.person = m.AddStakeholder(w.rep, w.account, "Wang", "13800000000", map[string]string{"F": "two children", "hobby": "tennis"})
@@ -640,6 +643,11 @@ func TestIdempotentKeyRunsOnce(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			return ontology.Result{}, nil
 		}})
+	ontology.AddAction(reg, ontology.ActionType[string, struct{}]{Name: "thing.other", Label: "Other", LabelZh: "别的", Permission: "x:make", Idempotent: true, Agent: ontology.Never,
+		Apply: func(context.Context, string, struct{}, ontology.Input) (ontology.Result, error) {
+			runs.Add(1)
+			return ontology.Result{}, nil
+		}})
 	if err := reg.Check(); err != nil {
 		t.Fatal(err)
 	}
@@ -658,6 +666,13 @@ func TestIdempotentKeyRunsOnce(t *testing.T) {
 	wg.Wait()
 	if n := runs.Load(); n != 1 {
 		t.Fatalf("the action ran %d times for one key", n)
+	}
+	// A key covers the module: on another action it's a conflict, and runs nothing.
+	if _, err := reg.Apply(ctx, "u1", "thing.other", ontology.ActionRequest{}, ontology.Input{IdempotencyKey: "k1"}); err == nil || !strings.Contains(err.Error(), "idempotency_conflict") {
+		t.Fatalf("the same key on another action: %v", err)
+	}
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("another action ran under a used key: %d runs", n)
 	}
 	// A failed apply frees its key, so the retry runs.
 	failing.Store(true)
@@ -735,6 +750,39 @@ func TestUndo(t *testing.T) {
 	c := w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "late"}}, "Idempotency-Key", "u-0003")
 	w.clock.add(25 * time.Hour)
 	w.call("POST", "/v1/undo/"+get(c.body, "undo", "id").(string), w.as(w.rep), nil).want(t, 409, "undo_expired")
+}
+
+// An undo that was interrupted after it started, before its compensation was
+// written, runs again when the person retries, even past its window; once its
+// compensation is written it is done.
+func TestInterruptedUndo(t *testing.T) {
+	w := newWorld(t)
+	ref := dealRef(w.deal)
+	a := w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "met"}}, "Idempotency-Key", "u-0001")
+	undoID := get(a.body, "undo", "id").(string)
+	// Started, and stopped before Revert ran.
+	if err := w.undo.SetUndone(context.Background(), "t1", undoID, true); err != nil {
+		t.Fatal(err)
+	}
+	w.clock.add(25 * time.Hour)
+	w.call("POST", "/v1/undo/"+undoID, w.as(w.rep), nil).want(t, 200, "")
+	if records := w.m.Records(); len(records) != 2 || records[1].Undoes != records[0].ID {
+		t.Fatalf("ledger: %+v", records)
+	}
+	w.call("POST", "/v1/undo/"+undoID, w.as(w.rep), nil).want(t, 409, "undone")
+
+	// Written, and stopped before it was marked: a retry finds the compensation and is done.
+	b := w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "again"}}, "Idempotency-Key", "u-0002")
+	second := get(b.body, "undo", "id").(string)
+	w.call("POST", "/v1/undo/"+second, w.as(w.rep), nil).want(t, 200, "")
+	if err := w.undo.SetUndone(context.Background(), "t1", second, false); !errors.Is(err, ontology.ErrUndone) {
+		t.Fatalf("a finished undo can be unmarked: %v", err)
+	}
+	n := len(w.m.Records())
+	w.call("POST", "/v1/undo/"+second, w.as(w.rep), nil).want(t, 409, "undone")
+	if len(w.m.Records()) != n {
+		t.Fatal("undoing twice wrote a second compensation")
+	}
 }
 
 func TestStageChangeRecomputes(t *testing.T) {
@@ -821,6 +869,22 @@ func TestProposals(t *testing.T) {
 	id2 := toolData(t, out)["proposal"].(string)
 	w.call("POST", "/v1/proposals/"+id2+"/dismiss", w.as(w.rep), nil).want(t, 200, "")
 	w.call("POST", "/v1/proposals/"+id2+"/confirm", w.as(w.rep), nil).want(t, 409, "proposal_closed")
+
+	// A draft whose object changed since is refused and stays open; confirming with the
+	// revision the person now sees runs it.
+	out, _ = w.tool("sales_propose", w.rep, map[string]any{"action": "ticket.send", "object": ref, "params": map[string]any{"title": "Before the change"}})
+	id4 := toolData(t, out)["proposal"].(string)
+	drafted := w.revision(w.rep, ref)
+	w.call("POST", "/v1/actions/ticket.send/apply", w.as(w.rep), map[string]any{"object": ref, "revision": drafted, "params": map[string]any{"title": "In between"}}).want(t, 200, "")
+	now := w.revision(w.rep, ref)
+	if now == drafted {
+		t.Fatal("ticket.send didn't change the deal's revision")
+	}
+	w.call("POST", "/v1/proposals/"+id4+"/confirm", w.as(w.rep), nil).want(t, 409, "stale_revision")
+	if !strings.Contains(w.call("GET", "/v1/proposals", w.as(w.rep), nil).raw, id4) {
+		t.Fatal("a refused draft is no longer open")
+	}
+	w.call("POST", "/v1/proposals/"+id4+"/confirm", w.as(w.rep), map[string]any{"revision": now}).want(t, 200, "")
 
 	// Expired after 7 days.
 	out, _ = w.tool("sales_propose", w.rep, map[string]any{"action": "ticket.send", "object": ref, "params": map[string]any{"title": "y"}})
