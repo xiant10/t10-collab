@@ -65,13 +65,13 @@ Collab's rule is that an assistant acting for a person reads and drafts, and onl
 
 Accepting, declining, claiming, deleting and list or settings administration aren't actions, so no assistant can draft them: people do them in the app, and agent teammates with their own tools.
 
-What an assistant made through `work_act` is listed for the person at `GET /v1/undo`, with the agent, until it's undone or the day is over: Workbench shows it under **Done for you** with Undo.
+What an assistant made through `work_act` is listed for the person at `GET /v1/undo`, with the agent, until it's undone or the day is over. Everything an assistant did through `work_act` in the last 7 days, undoable or not, is at `GET /v1/done`, with its undo ID while it can still be undone: Workbench shows it under **Done for you**, with Undo where it can.
 
-A draft is confirmed under the person's rights at the time. One whose task changed since answers `stale_revision`, and Workbench offers to confirm it anyway with the current revision. Drafts and undo entries live in collab's own schema (`collab.ontology_proposals`, `collab.ontology_undo`, `collab.ontology_replays`).
+A draft is confirmed under the person's rights at the time. One whose task changed since answers `stale_revision`, and Workbench offers to confirm it anyway with the current revision. Drafts and undo entries live in collab's own schema (`collab.ontology_proposals`, `collab.ontology_undo`, `collab.ontology_replays`, `collab.ontology_done`).
 
 ## Agent tools
 
-An assistant acting for a person has the generated `work_describe`, `work_search`, `work_get`, `work_propose` and `work_act`, with collab's `work_people` and `work_history`, under `work:read`, `work:propose` and `work:act`. An agent teammate, whose run's principal is a tenant agent account, also has its own tools under `work:write` and `work:send`: nobody would confirm its drafts, so it acts as itself. The list is the same for every caller; a teammate's tool refuses anyone else and says to draft with `work_propose`. See [api.md](api.md#agent-tools-mcp).
+An assistant acting for a person has the generated `work_describe`, `work_search`, `work_get`, `work_propose` and `work_act`, with collab's `work_people` and `work_history`, under `work:read`, `work:propose` and `work:act`. The manifest lists `auto_apply`: with `work:apply` too, which the person grants by letting their assistant act without asking, `work_act` also takes the `propose` actions, with no draft, and the event it writes has `auto_apply: true` in its detail. An agent teammate, whose run's principal is a tenant agent account, also has its own tools under `work:write` and `work:send`: nobody would confirm its drafts, so it acts as itself. The list is the same for every caller; a teammate's tool refuses anyone else and says to draft with `work_propose`. See [api.md](api.md#agent-tools-mcp).
 
 ## Checks
 

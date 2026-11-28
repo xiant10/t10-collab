@@ -98,7 +98,7 @@ stateDiagram-v2
   pending --> expired: Held a departed owner's item for 14 days
 ```
 
-**Draft.** An assistant acting for a person reads and drafts, and only the person sends. It drafts through the [ontology](ontology.md): `work_propose` of `work_item.send`, `.comment`, `.edit` and the rest, which wait for the person in Workbench's "For you to confirm" and on the task's page. A task of the person's own it may make with `work_act`, and the person can undo it for a day, until someone else is on it.
+**Draft.** An assistant acting for a person reads and drafts, and only the person sends. It drafts through the [ontology](ontology.md): `work_propose` of `work_item.send`, `.comment`, `.edit` and the rest, which wait for the person in Workbench's "For you to confirm" and on the task's page. A task of the person's own it may make with `work_act`, and the person can undo it for a day, until someone else is on it. A person who lets their assistant act without asking (Workbench's Settings) gives it `work:apply`: it then sends, comments and edits with `work_act`, with no draft, and the item's history marks each such change `auto_apply`. Workbench's "Done for you" lists them from `GET /v1/done`, with Undo only for what can be undone.
 
 **Manage together.** Any owner adds collaborators, who can edit and comment. Every member of a list can see and edit its items. A list item can have no owner, and any member can claim it, which gives a team a shared backlog. An owner can put an item made elsewhere, such as from a conversation, on a list they're on, or take it off.
 
@@ -227,7 +227,7 @@ Every route needs a bearer token and every list read is paginated. [`openapi.yam
 | Notifications | `GET /v1/notifications?after=`, `POST /v1/notifications/read` |
 | Settings and admin | `GET /v1/settings`, `PUT /v1/admin/settings`; departures queue under `/v1/admin/departures`; `GET`, `PUT /v1/admin/agents/{user}/intake`; `GET /v1/admin/intake-lists` |
 | Module | `GET /v1/module` (manifest), `GET /internal/v1/attention` (service token only) |
-| Ontology | The contract's routes: `/v1/ontology`, `/v1/objects/…`, `/v1/actions/…`, `/v1/undo/{id}`, `/v1/proposals…`. See [ontology.md](ontology.md) |
+| Ontology | The contract's routes: `/v1/ontology`, `/v1/objects/…`, `/v1/actions/…`, `/v1/undo/{id}`, `/v1/done`, `/v1/proposals…`. See [ontology.md](ontology.md) |
 | Agents | `POST /mcp`: the generated `work_describe`, `work_search`, `work_get`, `work_propose`, `work_act`, with `work_people` and `work_history`; and for agent teammates only `work_workflow`, `work_create`, `work_update`, `work_comment`, `work_link`, `work_send`, `work_advance`, `work_transition`, `work_accept`, `work_decline`, `work_claim` |
 
 Clients poll notifications about every 30 seconds. Polling needs no broker, and SSE can be added later without changing the data.

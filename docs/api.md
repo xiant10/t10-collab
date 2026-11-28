@@ -156,7 +156,7 @@ These need a tenant admin, or a member holding `work:admin` from `auth-server`.
 
 ## Ontology
 
-Collab serves the workspace's ontology contract (`contracts/ontology/README.md`) over its tasks, lists, comments and offers, with the routes the contract names: `GET /v1/ontology`, `GET /v1/objects/{type}/{id}`, `POST /v1/objects/{type}/search`, `GET /v1/objects/{type}/{id}/links/{link}`, `POST /v1/objects/resolve`, `POST /v1/actions/{action}/validate` and `/apply`, `GET /v1/undo` and `POST /v1/undo/{id}`, and `GET /v1/proposals` with `POST /v1/proposals/{id}/confirm` and `/dismiss`. What it declares, who reads what, and each action's tier are in [ontology.md](ontology.md); the core descriptor is pinned in [ontology.json](ontology.json).
+Collab serves the workspace's ontology contract (`contracts/ontology/README.md`) over its tasks, lists, comments and offers, with the routes the contract names: `GET /v1/ontology`, `GET /v1/objects/{type}/{id}`, `POST /v1/objects/{type}/search`, `GET /v1/objects/{type}/{id}/links/{link}`, `POST /v1/objects/resolve`, `POST /v1/actions/{action}/validate` and `/apply`, `GET /v1/undo` and `POST /v1/undo/{id}`, `GET /v1/done`, and `GET /v1/proposals` with `POST /v1/proposals/{id}/confirm` and `/dismiss`. What it declares, who reads what, and each action's tier are in [ontology.md](ontology.md); the core descriptor is pinned in [ontology.json](ontology.json).
 
 ## Agent tools (MCP)
 
@@ -178,7 +178,7 @@ A result's text is JSON inside one `<module_record>` tag, which marks it as data
 | `work_search` | `work:read` | `type`, `filter?`, `sort?`, `limit?`, `cursor?` | Search tasks, lists, comments or offers. "My overdue tasks" is `relation eq owner` and `deadline lt` now |
 | `work_get` | `work:read` | `ref`, `sources?` | One object, with the actions on it and whether each is allowed now |
 | `work_propose` | `work:propose` | `action`, `object?`, `params` | Draft an action for the person to confirm in Workbench |
-| `work_act` | `work:act` | `action`, `object?`, `revision?`, `params`, `request_id` | Take an undoable action: only `work_item.create`, which the person can undo for a day |
+| `work_act` | `work:act`, and `work:apply` for a propose action | `action`, `object?`, `revision?`, `params`, `request_id` | Take an action with no draft: `work_item.create`, which the person can undo for a day, and, when the person let their assistant act without asking (`work:apply`), any action `work_describe` marks `agent_applies` |
 | `work_people` | `work:read` | `q?` or `ids?`, paging | Find colleagues, or name user IDs |
 | `work_history` | `work:read` | `id`, paging | History, oldest first |
 | `work_workflow` | `work:read`, teammates only | `id` | Where an item is on its workflow, and a typed item's `moves` and `version` |
@@ -195,7 +195,7 @@ A result's text is JSON inside one `<module_record>` tag, which marks it as data
 
 The list is the same for every caller, as the ontology contract has it. A teammate's tools take an `id` or `offer_id` either plain or as the reference the generated tools answer, such as `collab:work_item:wi_3c1…`.
 
-"Teammates only" means the token's principal must be an agent account (`acc_…`), acting on its own items under its own rights; anyone else is told to draft with `work_propose`. An assistant acting for a person reads and drafts, and the person confirms: it holds `work:read`, `work:propose` and `work:act`, and a teammate's run holds `work:read`, `work:write` and `work:send`. A grant with constraints is refused, because collab defines none.
+"Teammates only" means the token's principal must be an agent account (`acc_…`), acting on its own items under its own rights; anyone else is told to draft with `work_propose`. An assistant acting for a person reads and drafts, and the person confirms: it holds `work:read`, `work:propose` and `work:act`, and `work:apply` while the person lets it act without asking (auth-server keeps that on the grant's chain only while they do), and a teammate's run holds `work:read`, `work:write` and `work:send`. A grant with constraints is refused, because collab defines none.
 
 ## Events it posts
 

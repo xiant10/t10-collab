@@ -18,7 +18,7 @@ import (
 // route makes. Collab's rule is that an assistant reads and drafts, and only the
 // person sends: a task the person keeps to themselves an assistant may make,
 // and the person can undo it; anything other people see waits for the person to
-// confirm. Accepting, declining, claiming, deleting and administration aren't
+// confirm, unless the person let their assistant act without asking (work:apply). Accepting, declining, claiming, deleting and administration aren't
 // actions, so no assistant can even draft them.
 
 // undoWindow is how long the person can undo a task an assistant made.
@@ -34,6 +34,14 @@ func strPtr(in onto.Input, name string) *string {
 		return &s
 	}
 	return nil
+}
+
+// as is the caller for the service, marked when an agent applied a propose
+// action with no draft because the person let it act without asking, so the
+// item's history records it.
+func as(c policy.Caller, in onto.Input) policy.Caller {
+	c.AutoApply = in.AutoApply
+	return c
 }
 
 // userID is the ID in an auth:user reference.
@@ -80,7 +88,7 @@ func (o *Ontology) declareActions() {
 			} else if in.Params["clear_deadline"] == true {
 				p.DueAt = workitems.OptionalTime{Set: true}
 			}
-			_, err := o.d.Items.Update(ctx, c, r.ID, p)
+			_, err := o.d.Items.Update(ctx, as(c, in), r.ID, p)
 			return onto.Result{ID: r.ID}, err
 		},
 	})
@@ -110,7 +118,7 @@ func (o *Ontology) declareActions() {
 			return nil
 		},
 		Apply: func(ctx context.Context, c policy.Caller, r item, in onto.Input) (onto.Result, error) {
-			_, err := o.d.Items.Update(ctx, c, r.ID, workitems.Patch{Version: int(in.Revision), Status: strPtr(in, "to")})
+			_, err := o.d.Items.Update(ctx, as(c, in), r.ID, workitems.Patch{Version: int(in.Revision), Status: strPtr(in, "to")})
 			return onto.Result{ID: r.ID}, err
 		},
 	})
@@ -141,7 +149,7 @@ func (o *Ontology) declareActions() {
 			return []onto.FieldError{{Param: "move", Code: "not_allowed"}}
 		},
 		Apply: func(ctx context.Context, c policy.Caller, r item, in onto.Input) (onto.Result, error) {
-			_, err := o.d.Items.Transition(ctx, c, r.ID, workitems.TransitionRequest{Transition: str(in, "move"), Note: str(in, "note"), Version: int(in.Revision)})
+			_, err := o.d.Items.Transition(ctx, as(c, in), r.ID, workitems.TransitionRequest{Transition: str(in, "move"), Note: str(in, "note"), Version: int(in.Revision)})
 			return onto.Result{ID: r.ID}, err
 		},
 	})
@@ -153,7 +161,7 @@ func (o *Ontology) declareActions() {
 		Permission:  policy.ActionWrite, Agent: onto.Propose,
 		Available: func(_ context.Context, _ policy.Caller, r item) string { return open(r, r.Relation.CanRead()) },
 		Apply: func(ctx context.Context, c policy.Caller, r item, in onto.Input) (onto.Result, error) {
-			_, err := o.d.Items.AddComment(ctx, c, r.ID, str(in, "body"), nil)
+			_, err := o.d.Items.AddComment(ctx, as(c, in), r.ID, str(in, "body"), nil)
 			return onto.Result{ID: r.ID}, err
 		},
 	})
@@ -173,7 +181,7 @@ func (o *Ontology) declareActions() {
 			if kind == "" {
 				kind = "other"
 			}
-			_, err := o.d.Items.AddLink(ctx, c, r.ID, workitems.NewLink{URL: str(in, "url"), Title: str(in, "title"), Kind: kind})
+			_, err := o.d.Items.AddLink(ctx, as(c, in), r.ID, workitems.NewLink{URL: str(in, "url"), Title: str(in, "title"), Kind: kind})
 			return onto.Result{ID: r.ID}, err
 		},
 	})
@@ -197,7 +205,7 @@ func (o *Ontology) declareActions() {
 			return ""
 		},
 		Apply: func(ctx context.Context, c policy.Caller, r item, in onto.Input) (onto.Result, error) {
-			_, err := o.d.Offers.Send(ctx, c, r.ID, offers.Send{To: userID(str(in, "to")), Mode: str(in, "mode"), Note: str(in, "note")})
+			_, err := o.d.Offers.Send(ctx, as(c, in), r.ID, offers.Send{To: userID(str(in, "to")), Mode: str(in, "mode"), Note: str(in, "note")})
 			return onto.Result{ID: r.ID}, err
 		},
 	})

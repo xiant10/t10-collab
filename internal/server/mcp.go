@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	onto "github.com/xiant10/t10-modkit/ontology"
 	"github.com/xiant10/t10-modkit/people"
 
 	"t10-collab/internal/offers"
@@ -525,7 +526,7 @@ func (s *Server) mcpCall(w http.ResponseWriter, r *http.Request, message rpcMess
 	defer end()
 	caller := policy.Caller{TenantID: who.TenantID, UserID: who.UserID, GrantID: who.Agent.GrantID, GrantChain: grantIDs(who.Agent.Chain)}
 	if t.generated != nil {
-		result := t.generated(ctx, caller, who.Agent.Runtime, params.Arguments)
+		result := t.generated(onto.WithAgentGrant(ctx, who.Allows), caller, who.Agent.Runtime, params.Arguments)
 		slog.Info("tool call", "tool", t.name, "grant", who.Agent.GrantID, "ok", result["isError"] != true)
 		rpcResult(w, message.ID, result)
 		return

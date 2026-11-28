@@ -53,7 +53,7 @@ const (
 // manifest tells a client this module is here and what it can rely on. Routes
 // and fields can only be added within an api_version.
 var manifest = map[string]any{
-	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention", "item_types", "ontology"},
+	"id": "collab", "api_version": 1, "action_prefix": "work", "enabled": true, "features": []string{"attention", "item_types", "ontology", "auto_apply"},
 	// trigger_events are the kinds this posts to t10-automations, each about one
 	// agent account, which an automation can fire on.
 	"trigger_events": []string{"work.offered", "work.assigned", "work.accepted", "work.declined", "work.commented", "list.item_added"},

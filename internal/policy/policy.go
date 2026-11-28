@@ -23,6 +23,10 @@ const (
 	// the person can undo.
 	ActionPropose = "work:propose"
 	ActionAct     = "work:act"
+	// ActionApply lets work_act take a propose action, such as a send, with no
+	// draft: the person let their assistant act without asking. auth-server
+	// keeps it on a grant's chain only while the person's choice says so.
+	ActionApply = "work:apply"
 )
 
 var (
@@ -45,6 +49,9 @@ type Caller struct {
 	GrantID string
 	// GrantChain is the agent's grants, root first, ending with GrantID.
 	GrantChain []string
+	// AutoApply is set when the agent applied a change with no draft, because
+	// the person let it act without asking. The event's detail records it.
+	AutoApply bool
 }
 
 // Relation is everything about a caller that access to one item depends on.
