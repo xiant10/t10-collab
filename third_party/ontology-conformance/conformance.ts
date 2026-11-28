@@ -8,7 +8,9 @@
  * The config, such as testdata/stub.json, gives:
  *   tokens: in_scope (a person who sees `visible`), out_of_scope (a person in the same tenant who doesn't), agent (a
  *     delegated token for in_scope's person whose grant holds <prefix>:read and <prefix>:propose), and optionally
- *     agent_read_only (one whose grant holds only <prefix>:read), without which the grant check is skipped;
+ *     agent_read_only (one whose grant holds only <prefix>:read), without which the grant check is skipped, and
+ *     agent_apply (one for in_scope's person whose grant also holds <prefix>:act and <prefix>:apply, as when the person
+ *     let their assistant act without asking), without which the auto-apply checks are skipped;
  *   visible: a reference in_scope sees;
  *   search: {type, body, limit, expect}: a search in_scope sees `expect` objects of, paged by `limit`;
  *   forbidden, wrong_state, apply: {action, object, params}: an action in_scope sees but may not take, one on an
@@ -16,6 +18,8 @@
  *   idempotent: an idempotent action; undo: an undo action, with `dependent`, an action that then depends on it. A
  *     module with none leaves them out, and those checks are skipped. A module where nothing can depend on an undo
  *     action leaves out `dependent`, and the undo_conflict check is skipped;
+ *   auto_apply: optionally, an action with tier propose that in_scope may take, for agent_apply to apply through
+ *     <prefix>_act. A module whose manifest doesn't list auto_apply skips those checks;
  *   sensitive: optionally, a reference in_scope sees with a value in a sensitive property, for the masking checks.
  *     Without it the suite looks for one with in_scope's search of each type that has a sensitive property;
  *   mcp: optionally, the path of the module's MCP endpoint, /mcp when left out.
@@ -34,7 +38,7 @@ import { checkDescriptor } from "./descriptor.ts";
 type Json = any;
 type ActionCase = { action: string; object?: string; params: Record<string, Json> };
 export type Config = {
-	tokens: { in_scope: string; out_of_scope: string; agent: string; agent_read_only?: string };
+	tokens: { in_scope: string; out_of_scope: string; agent: string; agent_read_only?: string; agent_apply?: string };
 	visible: string;
 	search: { type: string; body: Record<string, Json>; limit: number; expect: number };
 	forbidden: ActionCase;
@@ -42,6 +46,7 @@ export type Config = {
 	apply: ActionCase;
 	idempotent?: ActionCase;
 	undo?: ActionCase & { dependent?: ActionCase };
+	auto_apply?: ActionCase;
 	sensitive?: string;
 	mcp?: string;
 };
@@ -354,10 +359,12 @@ export async function runSuite(base: string, config: Config, log: (line: string)
 		}
 		return sensitiveObject;
 	};
+	const autoApply = () => (manifest?.features ?? []).includes("auto_apply");
 	const declaresSensitive = () => Object.keys(descriptor?.object_types ?? {}).some((t) => sensitiveOf(t).length > 0);
 	const generatedNames = () => {
 		const names = ["describe", "search", "get", "propose"].map((t) => `${prefix}_${t}`);
-		if (Object.values(descriptor?.action_types ?? {}).some((a: Json) => a.agent === "undoable")) names.push(`${prefix}_act`);
+		const tiers = Object.values(descriptor?.action_types ?? {}).map((a: Json) => a.agent);
+		if (tiers.includes("undoable") || (autoApply() && tiers.includes("propose"))) names.push(`${prefix}_act`);
 		return names;
 	};
 
@@ -365,7 +372,7 @@ export async function runSuite(base: string, config: Config, log: (line: string)
 		const anonymous = await listTools();
 		const names = anonymous.map((t) => t.name);
 		for (const name of generatedNames()) must(names.includes(name), `tools/list has no ${name}`);
-		if (!generatedNames().includes(`${prefix}_act`)) must(!names.includes(`${prefix}_act`), `${prefix}_act is listed with no undoable action`);
+		if (!generatedNames().includes(`${prefix}_act`)) must(!names.includes(`${prefix}_act`), `${prefix}_act is listed with no action an agent may apply`);
 		const withToken = await listTools(agent);
 		must(JSON.stringify(withToken) === JSON.stringify(anonymous), "the list with an agent's token differs from the one with no token");
 	});
@@ -444,6 +451,87 @@ export async function runSuite(base: string, config: Config, log: (line: string)
 		},
 		config.tokens.agent_read_only ? undefined : "the config names no tokens.agent_read_only",
 	);
+
+	// Auto-apply: a person can let their assistant apply propose actions, which the grant carries as <prefix>:apply.
+	const applier = config.tokens.agent_apply as string;
+	const noAutoApply = !autoApply() ? "the manifest doesn't list auto_apply" : !applier ? "the config names no tokens.agent_apply" : undefined;
+	const doneList = async (token: string): Promise<Json[]> => {
+		const l = await call("GET", "/v1/done", token);
+		must(l.status === 200 && Array.isArray(l.body?.done), `GET /v1/done answered ${l.status} ${l.text}`);
+		return l.body.done;
+	};
+	const act = async (c: ActionCase, token: string) => {
+		const b = await body(c);
+		return tool(`${prefix}_act`, { action: c.action, ...(b.object ? { object: b.object, revision: b.revision } : {}), params: b.params, request_id: `conformance-${randomUUID()}` }, token);
+	};
+
+	await check(
+		"describe marks the actions this agent may apply",
+		async () => {
+			const plain = await toolData(`${prefix}_describe`, {});
+			const allowed = await toolData(`${prefix}_describe`, {}, applier);
+			for (const [name, a] of Object.entries(allowed.action_types ?? {}) as [string, Json][]) {
+				must(typeof a.agent_applies === "boolean", `${name} has no agent_applies`);
+				if (a.agent === "propose") {
+					must(a.agent_applies === true, `${name} isn't agent_applies for an agent whose grant holds ${prefix}:apply`);
+					must(plain.action_types?.[name]?.agent_applies === false, `${name} is agent_applies for an agent whose grant doesn't hold ${prefix}:apply`);
+				}
+			}
+		},
+		noAutoApply,
+	);
+
+	await check(
+		"agents apply a propose action only with <prefix>:apply, with no draft",
+		async () => {
+			const c = config.auto_apply!;
+			must(descriptor.action_types?.[c.action]?.agent === "propose", `auto_apply's ${c.action} isn't a propose action`);
+			const without = await act(c, agent);
+			must(without.error === "not_allowed_for_agents", `${prefix}_act without ${prefix}:apply answered ${without.error ?? "a result"}`);
+			const before = await call("GET", "/v1/proposals", person);
+			const got = await act(c, applier);
+			must(got.data !== undefined, `${prefix}_act with ${prefix}:apply answered ${got.error ? `error ${got.error}` : got.text.slice(0, 200)}`);
+			must(!got.data.undo, "an applied propose action answered an undo ID");
+			const after = await call("GET", "/v1/proposals", person);
+			must(after.body?.proposals?.length === before.body?.proposals?.length, "a draft was stored");
+			const done = await doneList(person);
+			must(done.some((d) => d.action === c.action && d.agent && !d.undo_id), `GET /v1/done doesn't list the applied ${c.action}`);
+		},
+		noAutoApply ?? (config.auto_apply ? undefined : "the config names no auto_apply action"),
+	);
+
+	await check(
+		"agents never apply an action whose tier is never, even with <prefix>:apply",
+		async () => {
+			const [name, a] = never as [string, Json];
+			let object: string | undefined;
+			let revision: number | undefined;
+			if (a.on) {
+				const found = await call("POST", `/v1/objects/${encodeURIComponent(a.on)}/search`, person, { limit: 1 });
+				object = found.status === 200 ? found.body.objects[0]?.ref : undefined;
+				revision = found.status === 200 ? found.body.objects[0]?.revision : undefined;
+			}
+			const got = await tool(`${prefix}_act`, { action: name, ...(object ? { object, revision } : {}), params: {}, request_id: `conformance-${randomUUID()}` }, applier);
+			must(got.error === "not_allowed_for_agents", `${prefix}_act of ${name} answered ${got.error ?? "a result"}`);
+		},
+		noAutoApply ?? (never ? undefined : "the descriptor declares no action with tier never"),
+	);
+
+	await check(
+		"done lists what agents did, for their person only",
+		async () => {
+			const c = config.undo ?? config.auto_apply!;
+			const got = await act(c, applier);
+			must(got.data !== undefined, `${prefix}_act answered ${got.error ? `error ${got.error}` : got.text.slice(0, 200)}`);
+			const mine = await doneList(person);
+			const entry = mine[0];
+			must(entry && entry.action === c.action && typeof entry.agent === "string" && entry.agent !== "", `GET /v1/done's newest entry is ${JSON.stringify(entry)}, not ${c.action} with its agent`);
+			if (got.data.undo) must(entry.undo_id === got.data.undo.id && Date.parse(entry.undo_expires_at) > Date.now(), "the entry doesn't carry its undo ID and window");
+			must(!(await doneList(outsider)).some((d) => d.id === entry.id), "GET /v1/done lists another person's entry");
+			must((await call("GET", "/v1/done", agent)).status === 401, "a delegated token read GET /v1/done");
+		},
+		noAutoApply ?? (config.undo || config.auto_apply ? undefined : "the config names no undo or auto_apply action"),
+	);
 	return failed;
 }
 
@@ -476,6 +564,12 @@ const breaks: Record<string, string> = {
 	"agent-filter": "agents can't filter or sort on a sensitive property",
 	"agent-grant": "each tool needs its grant action",
 	"agent-data": "tool results are marked as data",
+	"agent-applies": "describe marks the actions this agent may apply",
+	"agent-apply": "agents apply a propose action only with <prefix>:apply",
+	"agent-apply-never": "agents never apply an action whose tier is never",
+	"done-list": "done lists what agents did",
+	"done-owner": "done lists what agents did",
+	"done-delegated": "done lists what agents did",
 };
 
 async function freePort(): Promise<number> {

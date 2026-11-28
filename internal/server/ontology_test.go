@@ -321,6 +321,70 @@ func TestAnAssistantDraftsASendThePersonConfirms(t *testing.T) {
 	}
 }
 
+// The person let their assistant act without asking (work:apply): a send goes
+// out with no draft, and the item's history says how.
+func TestAnAssistantSendsWhenThePersonLetsIt(t *testing.T) {
+	h := newHarness(t)
+	ts := h.mcpServer()
+	id := h.item("ada")
+	send := func(token, request string) toolReply {
+		return call(t, ts.URL, token, "work_act", map[string]any{
+			"action": "work_item.send", "object": ref(id), "revision": 1,
+			"params": map[string]any{"to": "auth:user:bob", "note": "You know Contoso"}, "request_id": request,
+		})
+	}
+	if got := send("agent-assistant", "req-send-01"); !got.failed || !strings.HasPrefix(got.text, "not_allowed_for_agents") {
+		t.Fatalf("a send without work:apply = %+v", got)
+	}
+	described := call(t, ts.URL, "agent-assistant", "work_describe", map[string]any{})
+	if a := described.data["action_types"].(map[string]any)["work_item.send"].(map[string]any); a["agent_applies"] != false {
+		t.Errorf("work_item.send without work:apply: %v", a)
+	}
+	described = call(t, ts.URL, "agent-apply", "work_describe", map[string]any{})
+	if a := described.data["action_types"].(map[string]any)["work_item.send"].(map[string]any); a["agent_applies"] != true {
+		t.Errorf("work_item.send with work:apply: %v", a)
+	}
+	sent := send("agent-apply", "req-send-02")
+	if sent.failed || sent.data["undo"] != nil {
+		t.Fatalf("a send with work:apply = %+v", sent)
+	}
+	offers := h.want("ada", "GET", "/v1/offers?box=sent", nil, http.StatusOK)["offers"].([]any)
+	if len(offers) != 1 || offers[0].(map[string]any)["to_user_id"] != "bob" {
+		t.Fatalf("sent = %v", offers)
+	}
+	if p := h.want("ada", "GET", "/v1/proposals", nil, http.StatusOK)["proposals"].([]any); len(p) != 0 {
+		t.Errorf("a draft was stored: %v", p)
+	}
+	// A retried comment posts once, and it says it was applied without asking.
+	for range 2 {
+		if got := call(t, ts.URL, "agent-apply", "work_act", map[string]any{
+			"action": "work_item.comment", "object": ref(id), "revision": 1, "params": map[string]any{"body": "Sent to Bob"}, "request_id": "req-comment-01",
+		}); got.failed {
+			t.Fatalf("a comment with work:apply = %+v", got)
+		}
+	}
+	events := h.want("ada", "GET", "/v1/work-items/"+id+"/events", nil, http.StatusOK)["events"].([]any)
+	comments, marked := 0, 0
+	for _, raw := range events {
+		e := raw.(map[string]any)
+		detail, _ := e["detail"].(map[string]any)
+		if e["kind"] == "comment.added" {
+			comments++
+		}
+		if detail["auto_apply"] == true {
+			marked++
+		}
+	}
+	if comments != 1 || marked < 2 {
+		t.Errorf("events: %d comments, %d marked auto_apply: %v", comments, marked, events)
+	}
+	// The person sees both in what was done for them, without Undo.
+	done := h.want("ada", "GET", "/v1/done", nil, http.StatusOK)["done"].([]any)
+	if len(done) != 2 || done[0].(map[string]any)["action"] != "work_item.comment" || done[0].(map[string]any)["undo_id"] != nil {
+		t.Errorf("done = %v", done)
+	}
+}
+
 func TestADraftOnAChangedItemIsStale(t *testing.T) {
 	h := newHarness(t)
 	ts := h.mcpServer()

@@ -327,6 +327,13 @@ paths:
       responses:
         "200": {$ref: "#/components/responses/Ontology"}
         default: {$ref: "#/components/responses/Error"}
+  /v1/done:
+    get:
+      summary: What agents did for the caller in the last 7 days, undoable or not, newest first, with the undo ID while it can still be undone
+      operationId: listDone
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
   /v1/undo/{id}:
     parameters:
       - {$ref: "#/components/parameters/id"}

@@ -34,6 +34,9 @@ func (a agents) Verify(ctx context.Context, raw string) (*verifier.Identity, err
 		return grantOf(policy.ActionRead), nil
 	case "agent-assistant":
 		return grantOf(both...), nil
+	case "agent-apply":
+		// The person let their assistant act without asking.
+		return grantOf(append(both, policy.ActionApply)...), nil
 	case "agent-gus":
 		who := grantOf(both...)
 		who.UserID, who.TenantID = "gus", globex

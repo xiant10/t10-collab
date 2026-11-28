@@ -20,9 +20,39 @@ type Tool[C any] struct {
 	Run func(ctx context.Context, c C, agent string, args json.RawMessage) map[string]any
 }
 
+// agentGrantKey holds what the agent's grant allows, from WithAgentGrant.
+type agentGrantKey struct{}
+
+// WithAgentGrant tells the generated tools which grant actions the calling
+// agent holds. The MCP server that runs a tool passes its verified token's
+// check, such as the verifier's Identity.Allows. Without it, the tools take
+// the agent to hold no <prefix>:apply, so they draft every propose action.
+func WithAgentGrant(ctx context.Context, allows func(action string) bool) context.Context {
+	return context.WithValue(ctx, agentGrantKey{}, allows)
+}
+
+func agentAllows(ctx context.Context, action string) bool {
+	allows, _ := ctx.Value(agentGrantKey{}).(func(string) bool)
+	return allows != nil && allows(action)
+}
+
+// agentApplies reports whether the calling agent may apply an action through
+// <prefix>_act: an undoable one under <prefix>:act, and a propose one under
+// <prefix>:act and <prefix>:apply, which the person chose to grant.
+func (r *Registry[C]) agentApplies(ctx context.Context, tier Tier) bool {
+	p := r.opts.Prefix
+	switch tier {
+	case Undoable:
+		return agentAllows(ctx, p+":act")
+	case Propose:
+		return agentAllows(ctx, p+":act") && agentAllows(ctx, p+":apply")
+	}
+	return false
+}
+
 // Tools are the generated tools: describe, search, get and propose always, and
-// act exactly when the core declares an undoable action. Their names,
-// descriptions and schemas depend on no tenant.
+// act exactly when the core declares an undoable or a propose action. Their
+// names, descriptions and schemas depend on no tenant.
 func (r *Registry[C]) Tools() []Tool[C] {
 	p := r.opts.Prefix
 	read, propose, act := p+":read", p+":propose", p+":act"
@@ -64,12 +94,12 @@ func (r *Registry[C]) Tools() []Tool[C] {
 		},
 	}
 	core := r.Core()
-	if slices.ContainsFunc(sortedKeys(core.ActionTypes), func(k string) bool { return core.ActionTypes[k].Agent == Undoable }) {
+	if slices.ContainsFunc(sortedKeys(core.ActionTypes), func(k string) bool { return core.ActionTypes[k].Agent != Never }) {
 		tools = append(tools, Tool[C]{
 			Tool: docsmcp.Tool{Name: p + "_act", Action: act,
-				Description: "Take an undoable action for the user, under their rights; the user can undo it. Only actions " + p + "_describe marks undoable. Give the object's revision from your last read, and a request_id of your own: retrying with the same request_id never applies it twice. Say what you did, and that they can undo it.",
+				Description: "Take an action for the user, under their rights, with no draft. Only actions " + p + "_describe marks agent_applies: undoable ones, and others only when the user lets you act without asking. Give the object's revision from your last read, and a request_id of your own: retrying with the same request_id never applies it twice. Say what you did; say they can undo it only when the answer has an undo ID.",
 				InputSchema: schema([]string{"action", "request_id"}, map[string]any{
-					"action":     text("An undoable action from " + p + "_describe."),
+					"action":     text("An action from " + p + "_describe marked agent_applies."),
 					"object":     text(refText),
 					"revision":   map[string]any{"type": "integer", "minimum": 1, "description": "The object's revision from your last read."},
 					"params":     map[string]any{"type": "object", "description": "The action's parameters."},
@@ -160,12 +190,17 @@ func (r *Registry[C]) toolDescribe(ctx context.Context, c C, _ string, args json
 	if err != nil {
 		return toolFailure(err)
 	}
-	// Only what an agent may propose or act on is described.
+	// Only what an agent may propose or act on is described, each saying
+	// whether this agent may apply it now.
 	for name, a := range d.ActionTypes {
 		if a.Agent == Never {
 			delete(d.ActionTypes, name)
 			delete(d.Tenant.ActionTypes, name)
+			continue
 		}
+		applies := r.agentApplies(ctx, a.Agent)
+		a.AgentApplies = &applies
+		d.ActionTypes[name] = a
 	}
 	d.Restricted = []string{}
 	return r.toolResult(d)
@@ -265,14 +300,14 @@ func (r *Registry[C]) toolAct(ctx context.Context, c C, agent string, args json.
 	if !ok {
 		return toolFailure(Fail(http.StatusNotFound, "unknown_action", "the descriptor declares no action "+a.Action))
 	}
-	if action.info.Agent != Undoable {
+	if action.info.Agent == Never || (action.info.Agent == Propose && !r.agentApplies(ctx, Propose)) {
 		return toolFailure(ErrNotAllowedForAgent)
 	}
 	if len(a.RequestID) < 8 || len(a.RequestID) > 100 {
 		return toolFailure(Fail(http.StatusBadRequest, "invalid_arguments", "request_id is 8 to 100 characters"))
 	}
 	out, err := r.Apply(asAgent(ctx), c, a.Action, ActionRequest{Object: a.Object, Revision: a.Revision, Params: a.Params},
-		Input{Via: "agent", Agent: agent, IdempotencyKey: a.RequestID})
+		Input{Via: "agent", Agent: agent, IdempotencyKey: a.RequestID, AutoApply: action.info.Agent == Propose})
 	if err != nil {
 		return toolFailure(err)
 	}

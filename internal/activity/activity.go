@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,7 +34,12 @@ type Change struct {
 
 // Record writes the event and one notification per person to tell.
 func Record(ctx context.Context, tx pgx.Tx, c policy.Caller, ch Change) error {
-	detail, err := json.Marshal(withDefault(ch.Detail))
+	d := withDefault(ch.Detail)
+	if c.AutoApply {
+		d = maps.Clone(d)
+		d["auto_apply"] = true
+	}
+	detail, err := json.Marshal(d)
 	if err != nil {
 		return fmt.Errorf("encode event: %w", err)
 	}

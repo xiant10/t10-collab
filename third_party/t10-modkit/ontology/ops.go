@@ -86,6 +86,18 @@ type UndoAnswer struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// DoneAnswer is one thing an agent did for the person, as GET /v1/done shows
+// it. UndoID and UndoExpiresAt are there while it can still be undone.
+type DoneAnswer struct {
+	ID            string     `json:"id"`
+	Action        string     `json:"action"`
+	Object        string     `json:"object,omitempty"`
+	Agent         string     `json:"agent"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UndoID        string     `json:"undo_id,omitempty"`
+	UndoExpiresAt *time.Time `json:"undo_expires_at,omitempty"`
+}
+
 // ProposalAnswer is a draft as the person's list shows it.
 type ProposalAnswer struct {
 	ID        string          `json:"id"`
@@ -473,7 +485,10 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 		return ApplyAnswer{}, Fail(http.StatusBadRequest, "idempotency_key_required", name+" needs an Idempotency-Key")
 	}
 	who := r.opts.Who(c)
-	if ok && a.info.Idempotent {
+	// Any action given a key replays its answer for it, so an agent's retry of
+	// a non-idempotent action never applies it twice.
+	keyed := ok && in.IdempotencyKey != "" && r.opts.Undo != nil
+	if keyed {
 		kept, found, err := r.opts.Undo.GetReplay(ctx, who.Tenant, who.User, replayScope, in.IdempotencyKey)
 		if err != nil {
 			return ApplyAnswer{}, r.asError(err)
@@ -493,7 +508,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	hash := requestHash(name, req, p.params)
 	// The key is claimed before the action runs, so a retry that arrives while
 	// this one is still running can't apply it a second time.
-	if a.info.Idempotent {
+	if keyed {
 		kept, reserved, err := r.opts.Undo.ReserveReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: replayScope, Key: in.IdempotencyKey, Hash: hash})
 		if err != nil {
 			return ApplyAnswer{}, r.asError(err)
@@ -505,7 +520,7 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 	res, err := p.action.apply(ctx, c, p.rec, in)
 	if err != nil {
 		// Nothing changed, so the key is free for a retry.
-		if a.info.Idempotent {
+		if keyed {
 			_ = r.opts.Undo.ReleaseReplay(context.WithoutCancel(ctx), who.Tenant, who.User, replayScope, in.IdempotencyKey)
 		}
 		return ApplyAnswer{}, r.asError(err)
@@ -532,7 +547,17 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 		}
 		out.Undo = &UndoRef{ID: entry.ID, ExpiresAt: entry.ExpiresAt}
 	}
-	if a.info.Idempotent {
+	if in.Via == "agent" && r.opts.Undo != nil {
+		done := DoneEntry{ID: ids.New("done"), Tenant: who.Tenant, User: who.User, Action: name, Object: r.ref(res.Type, res.ID),
+			Agent: in.Agent, CreatedAt: r.opts.Now()}
+		if out.Undo != nil {
+			done.UndoID = out.Undo.ID
+		}
+		if err := r.opts.Undo.SaveDone(ctx, done); err != nil {
+			return ApplyAnswer{}, r.asError(err)
+		}
+	}
+	if keyed {
 		encoded, _ := json.Marshal(out)
 		if err := r.opts.Undo.FinishReplay(ctx, Replay{Tenant: who.Tenant, User: who.User, Action: replayScope, Key: in.IdempotencyKey, Hash: hash, Answer: encoded}); err != nil {
 			return ApplyAnswer{}, r.asError(err)
@@ -696,6 +721,33 @@ func (r *Registry[C]) Undos(ctx context.Context, c C) ([]UndoAnswer, error) {
 			continue
 		}
 		out = append(out, UndoAnswer{ID: u.ID, Action: u.Action, Object: u.Object, Agent: u.Agent, CreatedAt: u.CreatedAt, ExpiresAt: u.ExpiresAt})
+	}
+	return out, nil
+}
+
+// DoneWindow is how far back GET /v1/done lists what agents did.
+const DoneWindow = 7 * 24 * time.Hour
+
+// Done is what agents applied for the caller in the last DoneWindow, newest
+// first, each with its undo ID and window while it can still be undone.
+func (r *Registry[C]) Done(ctx context.Context, c C) ([]DoneAnswer, error) {
+	out := []DoneAnswer{}
+	if r.opts.Undo == nil {
+		return out, nil
+	}
+	who := r.opts.Who(c)
+	now := r.opts.Now()
+	list, err := r.opts.Undo.RecentDone(ctx, who.Tenant, who.User, now.Add(-DoneWindow), now)
+	if err != nil {
+		return nil, r.asError(err)
+	}
+	for _, d := range list {
+		answer := DoneAnswer{ID: d.ID, Action: d.Action, Object: d.Object, Agent: d.Agent, CreatedAt: d.CreatedAt}
+		if a, ok := r.actions[d.Action]; ok && a.revert != nil && d.UndoID != "" && d.UndoOpen {
+			expires := d.UndoExpiresAt
+			answer.UndoID, answer.UndoExpiresAt = d.UndoID, &expires
+		}
+		out = append(out, answer)
 	}
 	return out, nil
 }

@@ -64,6 +64,9 @@ type Loaded struct {
 	Descriptors map[string]ontology.Descriptor
 	// Unavailable are the modules that didn't answer.
 	Unavailable []string
+	// AutoApply are the loaded modules whose manifest lists auto_apply: a person
+	// may let their assistant apply its actions, and it serves Done.
+	AutoApply []string
 }
 
 // PersonToken reports whether a bearer token is a person's own, by its claims,
@@ -158,7 +161,7 @@ func (c *Client) Load(ctx context.Context, token string) (Loaded, error) {
 	if len(versions) == 0 {
 		versions = []int{1}
 	}
-	out := Loaded{Descriptors: map[string]ontology.Descriptor{}, Unavailable: []string{}}
+	out := Loaded{Descriptors: map[string]ontology.Descriptor{}, Unavailable: []string{}, AutoApply: []string{}}
 	loaded := map[string]Module{}
 	for _, m := range c.Modules {
 		var manifest struct {
@@ -179,6 +182,9 @@ func (c *Client) Load(ctx context.Context, token string) (Loaded, error) {
 		}
 		out.Descriptors[m.ID] = d
 		loaded[m.ID] = m
+		if slices.Contains(manifest.Features, "auto_apply") {
+			out.AutoApply = append(out.AutoApply, m.ID)
+		}
 	}
 	c.mu.Lock()
 	c.loaded = loaded
@@ -373,6 +379,20 @@ func (c *Client) Undos(ctx context.Context, token, module string) ([]ontology.Un
 	}
 	err = c.do(ctx, token, m, "GET", "/v1/undo", nil, nil, &out)
 	return out.Undo, err
+}
+
+// Done is what agents applied for the person in a module that lists
+// auto_apply, newest first.
+func (c *Client) Done(ctx context.Context, token, module string) ([]ontology.DoneAnswer, error) {
+	var out struct {
+		Done []ontology.DoneAnswer `json:"done"`
+	}
+	m, err := c.module(module)
+	if err != nil {
+		return nil, err
+	}
+	err = c.do(ctx, token, m, "GET", "/v1/done", nil, nil, &out)
+	return out.Done, err
 }
 
 // Proposals are the person's open drafts in a module.

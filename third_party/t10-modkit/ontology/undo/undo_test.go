@@ -119,4 +119,62 @@ func exercise(t *testing.T, s ontology.UndoStore) {
 	if _, found, _ := s.GetReplay(ctx, "t1", "u2", "record.add", "k1"); found {
 		t.Fatal("another person's key")
 	}
+
+	// What agents did: an open undo entry, one already undone (undo_1), and an
+	// action with no undo; only the person's own, newest first, since a time.
+	open := ontology.UndoEntry{ID: "undo_2", Tenant: "t1", User: "u1", Action: "record.add", Object: "sales:deal:d1",
+		CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+	if err := s.SaveUndo(ctx, open); err != nil {
+		t.Fatal(err)
+	}
+	for i, d := range []ontology.DoneEntry{
+		{ID: "done_1", Tenant: "t1", User: "u1", Action: "record.add", Object: "sales:deal:d1", Agent: "ti", UndoID: "undo_1", CreatedAt: now},
+		{ID: "done_2", Tenant: "t1", User: "u1", Action: "deal.set_stage", Object: "sales:deal:d1", Agent: "ti", CreatedAt: now.Add(time.Minute)},
+		{ID: "done_3", Tenant: "t1", User: "u1", Action: "record.add", Object: "sales:deal:d1", Agent: "ti", UndoID: "undo_2", CreatedAt: now.Add(2 * time.Minute)},
+		{ID: "done_4", Tenant: "t1", User: "u2", Action: "record.add", Agent: "ti", CreatedAt: now.Add(3 * time.Minute)},
+		{ID: "done_0", Tenant: "t1", User: "u1", Action: "record.add", Agent: "ti", CreatedAt: now.Add(-48 * time.Hour)},
+	} {
+		if err := s.SaveDone(ctx, d); err != nil {
+			t.Fatalf("done %d: %v", i, err)
+		}
+	}
+	list, err := s.RecentDone(ctx, "t1", "u1", now.Add(-time.Hour), now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, d := range list {
+		ids = append(ids, d.ID)
+	}
+	if strings.Join(ids, ",") != "done_3,done_2,done_1" {
+		t.Fatalf("recent done: %v", ids)
+	}
+	if !list[0].UndoOpen || !list[0].UndoExpiresAt.Equal(open.ExpiresAt) || list[0].UndoID != "undo_2" || list[0].Agent != "ti" {
+		t.Fatalf("an open undo: %+v", list[0])
+	}
+	if list[1].UndoOpen || list[1].UndoID != "" || list[2].UndoOpen {
+		t.Fatalf("no undo, and an undone one: %+v %+v", list[1], list[2])
+	}
+	// Past its window an entry's undo is closed.
+	if later, _ := s.RecentDone(ctx, "t1", "u1", now.Add(-time.Hour), now.Add(25*time.Hour)); len(later) != 3 || later[0].UndoOpen {
+		t.Fatalf("after the window: %+v", later)
+	}
+}
+
+// Done entries older than 30 days are swept when the person's next one is saved.
+func TestPostgresDoneSweep(t *testing.T) {
+	s := testPostgres(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
+	old := ontology.DoneEntry{ID: "done_old", Tenant: "t1", User: "u1", Action: "a", CreatedAt: now.Add(-31 * 24 * time.Hour)}
+	if err := s.SaveDone(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveDone(ctx, ontology.DoneEntry{ID: "done_new", Tenant: "t1", User: "u1", Action: "a", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM "+s.Schema+".ontology_done WHERE id='done_old'").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the old entry is kept: %d %v", n, err)
+	}
 }

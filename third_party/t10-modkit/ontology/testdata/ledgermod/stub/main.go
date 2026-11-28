@@ -7,7 +7,9 @@
 //
 // Its tokens are ledgermod's: person:t1:rep1 sees building 12, person:t1:rep2
 // building 3, and agent:t1:rep1 is a delegated token for rep1 whose grant holds
-// sales:read, sales:propose and sales:act; agent:t1:rep1:read holds sales:read only.
+// sales:read, sales:propose and sales:act; agent:t1:rep1:read holds sales:read only,
+// and agent:t1:rep1:apply also holds sales:apply, as when rep1 let their
+// assistant act without asking.
 package main
 
 import (
@@ -32,7 +34,8 @@ import (
 // The rules -break can break, each caught by one of the suite's checks.
 var breaks = []string{"scope", "paging", "hidden", "unknown-type", "resolve", "delegated", "forbidden", "wrong-state", "stale",
 	"replay", "undo-owner", "undo-list", "undo-conflict", "tier", "undoable", "tenant-action", "label", "events", "interface",
-	"tools-tenant", "agent-never", "agent-mask", "agent-filter", "agent-grant", "agent-data"}
+	"tools-tenant", "agent-never", "agent-mask", "agent-filter", "agent-grant", "agent-data",
+	"agent-applies", "agent-apply", "agent-apply-never", "done-list", "done-owner", "done-delegated"}
 
 type order struct {
 	ID, Building, State, Summary string
@@ -148,7 +151,7 @@ func main() {
 	if is("events") {
 		events = map[string]any{}
 	}
-	manifest, _ := json.Marshal(map[string]any{"id": "sales", "api_version": 1, "action_prefix": "sales", "enabled": true, "features": []string{"ontology"}, "events": events})
+	manifest, _ := json.Marshal(map[string]any{"id": "sales", "api_version": 1, "action_prefix": "sales", "enabled": true, "features": []string{"ontology", "auto_apply"}, "events": events})
 	mux.HandleFunc("GET /v1/module", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(manifest)
@@ -187,8 +190,12 @@ func matches(f ontology.Filter, o *order) bool {
 // the routes answer.
 func breaking(rule string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if rule == "delegated" {
+		if rule == "delegated" || (rule == "done-delegated" && r.URL.Path == "/v1/done") {
 			r.Header.Set("Authorization", strings.Replace(r.Header.Get("Authorization"), "Bearer agent:", "Bearer person:", 1))
+		}
+		if rule == "done-owner" && r.URL.Path == "/v1/done" {
+			// Everyone reads rep1's list.
+			r.Header.Set("Authorization", "Bearer person:t1:rep1")
 		}
 		rec := httptest.NewRecorder()
 		next.ServeHTTP(rec, r)
@@ -220,6 +227,9 @@ func breaking(rule string, next http.Handler) http.Handler {
 		case rule == "undo-list" && path == "/v1/undo" && status == 200:
 			// It forgets what can still be undone.
 			body = []byte(`{"undo":[]}`)
+		case rule == "done-list" && path == "/v1/done" && status == 200:
+			// It forgets what agents did.
+			body = []byte(`{"done":[]}`)
 		case rule == "undo-conflict" && v["error"] == "undo_conflict":
 			status, body = 200, []byte(`{"object":null}`)
 		case path == "/v1/ontology" && status == 200:
@@ -312,14 +322,21 @@ func tools(reg *ontology.Registry[ledgermod.Caller], rule string) http.Handler {
 		}
 		t := generated[i]
 		grant := []string{"sales:read", "sales:propose", "sales:act"}
-		if strings.HasSuffix(r.Header.Get("Authorization"), ":read") {
+		switch auth := r.Header.Get("Authorization"); {
+		case strings.HasSuffix(auth, ":read"):
 			grant = []string{"sales:read"}
+		case strings.HasSuffix(auth, ":apply") || rule == "agent-apply":
+			grant = append(grant, "sales:apply")
 		}
 		if !slices.Contains(grant, t.Action) && rule != "agent-grant" {
 			reply(w, 403, map[string]any{"error": "forbidden"})
 			return
 		}
-		ctx := r.Context()
+		ctx := ontology.WithAgentGrant(r.Context(), func(action string) bool { return slices.Contains(grant, action) })
+		if rule == "agent-applies" {
+			// Every action looks like one the agent may apply.
+			ctx = ontology.WithAgentGrant(r.Context(), func(string) bool { return true })
+		}
 		args := map[string]json.RawMessage{}
 		_ = json.Unmarshal(msg.Params.Arguments, &args)
 		var result map[string]any
@@ -337,6 +354,19 @@ func tools(reg *ontology.Registry[ledgermod.Caller], rule string) http.Handler {
 			delete(args, "type")
 			body, _ := json.Marshal(args)
 			result = asData(reg.Search(ctx, c, objectType, body))
+		case rule == "agent-apply-never" && t.Name == "sales_act":
+			var a struct {
+				Action, Object, RequestID string
+				Revision                  int64
+				Params                    json.RawMessage
+			}
+			_ = json.Unmarshal(msg.Params.Arguments, &a)
+			var req struct {
+				RequestID string `json:"request_id"`
+			}
+			_ = json.Unmarshal(msg.Params.Arguments, &req)
+			result = asData(reg.Apply(ctx, c, a.Action, ontology.ActionRequest{Object: a.Object, Revision: a.Revision, Params: a.Params},
+				ontology.Input{Via: "agent", Agent: "conformance", IdempotencyKey: req.RequestID}))
 		default:
 			result = t.Run(ctx, c, "conformance", msg.Params.Arguments)
 		}

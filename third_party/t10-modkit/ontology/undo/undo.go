@@ -42,7 +42,11 @@ type Memory struct {
 	mu      sync.Mutex
 	entries map[string]ontology.UndoEntry
 	replays map[string]ontology.Replay
+	done    []ontology.DoneEntry
 }
+
+// DoneKept is how long a done entry is kept before it's swept.
+const DoneKept = 30 * 24 * time.Hour
 
 func (m *Memory) init() {
 	if m.entries == nil {
@@ -56,6 +60,37 @@ func (m *Memory) SaveUndo(_ context.Context, u ontology.UndoEntry) error {
 	m.init()
 	m.entries[u.Tenant+"|"+u.ID] = u
 	return nil
+}
+
+func (m *Memory) SaveDone(_ context.Context, d ontology.DoneEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.init()
+	m.done = append(m.done, d)
+	return nil
+}
+
+func (m *Memory) RecentDone(_ context.Context, tenant, user string, since, now time.Time) ([]ontology.DoneEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.init()
+	out := []ontology.DoneEntry{}
+	for _, d := range m.done {
+		if d.Tenant != tenant || d.User != user || d.CreatedAt.Before(since) {
+			continue
+		}
+		if u, ok := m.entries[tenant+"|"+d.UndoID]; ok && d.UndoID != "" {
+			d.UndoOpen, d.UndoExpiresAt = !u.Undone && now.Before(u.ExpiresAt), u.ExpiresAt
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return out, nil
 }
 
 func (m *Memory) GetUndo(_ context.Context, tenant, id string) (ontology.UndoEntry, error) {
@@ -126,6 +161,9 @@ func (m *Memory) Age(by time.Duration) {
 		u.CreatedAt, u.ExpiresAt = u.CreatedAt.Add(-by), u.ExpiresAt.Add(-by)
 		m.entries[k] = u
 	}
+	for i := range m.done {
+		m.done[i].CreatedAt = m.done[i].CreatedAt.Add(-by)
+	}
 }
 
 func replayKey(tenant, user, action, key string) string {
@@ -186,6 +224,37 @@ func (s Postgres) SaveUndo(ctx context.Context, u ontology.UndoEntry) error {
 	_, err := s.Pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.ontology_undo (tenant_id,id,user_id,action,agent,object,payload,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, s.Schema),
 		u.Tenant, u.ID, u.User, u.Action, u.Agent, u.Object, payload, u.CreatedAt, u.ExpiresAt)
 	return err
+}
+
+func (s Postgres) SaveDone(ctx context.Context, d ontology.DoneEntry) error {
+	var undoID *string
+	if d.UndoID != "" {
+		undoID = &d.UndoID
+	}
+	_, err := s.Pool.Exec(ctx, fmt.Sprintf(`WITH swept AS (DELETE FROM %[1]s.ontology_done WHERE tenant_id=$1 AND user_id=$3 AND created_at < $8)
+		INSERT INTO %[1]s.ontology_done (tenant_id,id,user_id,action,object,agent,undo_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$9)`, s.Schema),
+		d.Tenant, d.ID, d.User, d.Action, d.Object, d.Agent, undoID, d.CreatedAt.Add(-DoneKept), d.CreatedAt)
+	return err
+}
+
+func (s Postgres) RecentDone(ctx context.Context, tenant, user string, since, now time.Time) ([]ontology.DoneEntry, error) {
+	rows, err := s.Pool.Query(ctx, fmt.Sprintf(`SELECT d.id,d.tenant_id,d.user_id,d.action,d.object,d.agent,coalesce(d.undo_id,''),d.created_at,
+			coalesce(u.undone_at IS NULL AND u.expires_at > $4, false), coalesce(u.expires_at, d.created_at)
+		FROM %[1]s.ontology_done d LEFT JOIN %[1]s.ontology_undo u ON u.tenant_id=d.tenant_id AND u.id=d.undo_id
+		WHERE d.tenant_id=$1 AND d.user_id=$2 AND d.created_at >= $3 ORDER BY d.created_at DESC, d.id DESC LIMIT 200`, s.Schema), tenant, user, since, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ontology.DoneEntry{}
+	for rows.Next() {
+		var d ontology.DoneEntry
+		if err := rows.Scan(&d.ID, &d.Tenant, &d.User, &d.Action, &d.Object, &d.Agent, &d.UndoID, &d.CreatedAt, &d.UndoOpen, &d.UndoExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 func (s Postgres) GetUndo(ctx context.Context, tenant, id string) (ontology.UndoEntry, error) {

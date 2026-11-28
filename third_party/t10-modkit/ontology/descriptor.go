@@ -110,6 +110,9 @@ type ActionTypeInfo struct {
 	// UndoWindow is in seconds.
 	UndoWindow int  `json:"undo_window,omitempty"`
 	Agent      Tier `json:"agent"`
+	// AgentApplies is set only in <prefix>_describe's answer: whether the
+	// calling agent may apply the action now through <prefix>_act.
+	AgentApplies *bool `json:"agent_applies,omitempty"`
 }
 
 // Event is an event kind the module posts, and the object type it concerns.

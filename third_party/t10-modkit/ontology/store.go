@@ -76,8 +76,28 @@ type Replay struct {
 
 // UndoStore keeps undo entries and idempotent answers in the module's
 // database. ontology/undo has one in memory and one in Postgres.
+// DoneEntry is an action an agent applied for its person through its _act
+// tool, kept so the person can see what was done for them.
+type DoneEntry struct {
+	ID, Tenant, User string
+	Action, Object   string
+	Agent            string
+	// UndoID names the undo entry, for an undo action.
+	UndoID    string
+	CreatedAt time.Time
+	// UndoOpen and UndoExpiresAt are read from the undo entry: whether it can
+	// still be undone, and until when.
+	UndoOpen      bool
+	UndoExpiresAt time.Time
+}
+
 type UndoStore interface {
 	SaveUndo(ctx context.Context, u UndoEntry) error
+	// SaveDone records an action an agent applied for its person.
+	SaveDone(ctx context.Context, d DoneEntry) error
+	// RecentDone is the person's done entries made at or after since, newest
+	// first, each saying whether its undo entry is still open at now.
+	RecentDone(ctx context.Context, tenant, user string, since, now time.Time) ([]DoneEntry, error)
 	// OpenUndos are the person's entries that can still be undone at now: not
 	// undone, and before they expire. Newest first.
 	OpenUndos(ctx context.Context, tenant, user string, now time.Time) ([]UndoEntry, error)
