@@ -81,7 +81,10 @@ type Deal struct {
 type Record struct {
 	ID, Tenant, Owner, Deal, Kind, Summary string
 	Stage, Because, Undoes, Via            string
-	At                                     time.Time
+	// AutoApply is set when an agent applied it with no draft, because the
+	// person let it act without asking, as a module's audit records it.
+	AutoApply bool
+	At        time.Time
 }
 
 type Item struct {
@@ -825,7 +828,7 @@ func (m *Module) declareActions() {
 			because, _ := in.Params["because"].(string)
 			_, _, because, _ = ontology.SplitRef(because)
 			m.records = append(m.records, &Record{ID: m.id("rec"), Tenant: d.Tenant, Owner: d.Owner, Deal: d.ID, Kind: "stage", Stage: in.Params["to"].(string),
-				Summary: "Stage: " + in.Params["to"].(string), Because: because, Via: in.Via, At: m.now()})
+				Summary: "Stage: " + in.Params["to"].(string), Because: because, Via: in.Via, AutoApply: in.AutoApply, At: m.now()})
 			d.Revision++
 			return ontology.Result{ID: d.ID}, nil
 		},

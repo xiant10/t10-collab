@@ -966,12 +966,16 @@ func TestToolList(t *testing.T) {
 	if !bytes.Equal(first, second) || bytes.Contains(first, []byte("线索")) {
 		t.Fatal("the tool list depends on a tenant")
 	}
-	// A module with no undoable action has no act tool.
+	// A module whose actions are all never, or that has none, has no act tool.
 	reg := ontology.New(ontology.Options[string]{Module: "x", Prefix: "x", Version: 1})
 	ontology.AddObject(reg, thingType())
+	ontology.AddAction(reg, ontology.ActionType[string, string]{Name: "thing.close", Label: "Close", LabelZh: "关闭", On: "thing", Permission: "x:close", Agent: ontology.Never,
+		Apply: func(context.Context, string, string, ontology.Input) (ontology.Result, error) {
+			return ontology.Result{}, nil
+		}})
 	for _, tool := range reg.Tools() {
 		if tool.Name == "x_act" {
-			t.Fatal("x_act without an undoable action")
+			t.Fatal("x_act with only a never action")
 		}
 	}
 	if len(reg.Tools()) != 4 {
@@ -1072,6 +1076,119 @@ func TestToolsAct(t *testing.T) {
 	out, isErr = w.tool("sales_act", noPerm, map[string]any{"action": "record.add", "object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "x"}, "request_id": "req-00000004"})
 	if !isErr || !strings.HasPrefix(toolText(out), "forbidden") || len(w.m.Records()) != n {
 		t.Fatalf("no permission: %v", out)
+	}
+}
+
+// The person let their assistant act without asking: the grant holds sales:apply, and the
+// agent applies a propose action with no draft (spec: ontology/agent-tools, ontology/actions).
+func TestToolsAutoApply(t *testing.T) {
+	w := newWorld(t)
+	ref := dealRef(w.deal)
+	grant := func(actions ...string) context.Context {
+		return ontology.WithAgentGrant(context.Background(), func(a string) bool { return slices.Contains(actions, a) })
+	}
+	run := func(ctx context.Context, name string, args any) (map[string]any, bool) {
+		for _, tool := range w.m.Registry.Tools() {
+			if tool.Name == name {
+				raw, _ := json.Marshal(args)
+				out := tool.Run(ctx, w.rep, "agent:sales-assistant", raw)
+				isErr, _ := out["isError"].(bool)
+				return out, isErr
+			}
+		}
+		t.Fatalf("no tool %s", name)
+		return nil, false
+	}
+	plain := grant("sales:read", "sales:propose", "sales:act")
+	allowed := grant("sales:read", "sales:propose", "sales:act", "sales:apply")
+
+	// Describe says which actions this agent may apply.
+	applies := func(ctx context.Context, action string) any {
+		out, _ := run(ctx, "sales_describe", map[string]any{})
+		return get(toolData(t, out), "action_types", action, "agent_applies")
+	}
+	if applies(plain, "record.add") != true || applies(plain, "deal.set_stage") != false {
+		t.Fatalf("without sales:apply: record.add %v, deal.set_stage %v", applies(plain, "record.add"), applies(plain, "deal.set_stage"))
+	}
+	if applies(allowed, "deal.set_stage") != true || applies(grant("sales:read", "sales:apply"), "deal.set_stage") != false {
+		t.Fatal("agent_applies with sales:apply, or without sales:act")
+	}
+	if strings.Contains(w.call("GET", "/v1/ontology", w.as(w.rep), nil).raw, "agent_applies") {
+		t.Fatal("the descriptor route answers agent_applies")
+	}
+
+	stage := map[string]any{"action": "deal.set_stage", "object": ref, "revision": 1, "params": map[string]any{"to": "商机"}, "request_id": "req-auto-0001"}
+	// Without sales:apply it's refused, and nothing changes.
+	if out, isErr := run(plain, "sales_act", stage); !isErr || !strings.HasPrefix(toolText(out), "not_allowed_for_agents") {
+		t.Fatalf("without sales:apply: %v", out)
+	}
+	if w.revision(w.rep, ref) != 1 {
+		t.Fatal("a refused act changed the deal")
+	}
+	// With it, the stage changes once for a retried request, with no draft and no undo ID.
+	var first map[string]any
+	for range 2 {
+		out, isErr := run(allowed, "sales_act", stage)
+		if isErr {
+			t.Fatal(toolText(out))
+		}
+		first = toolData(t, out)
+	}
+	if first["undo"] != nil {
+		t.Fatalf("an applied propose action answered an undo ID: %v", first)
+	}
+	records := w.m.Records()
+	if len(records) != 1 || records[0].Stage != "商机" || records[0].Via != "agent" || !records[0].AutoApply {
+		t.Fatalf("records after a retried auto-apply: %+v", records)
+	}
+	if n := len(w.call("GET", "/v1/proposals", w.as(w.rep), nil).body["proposals"].([]any)); n != 0 {
+		t.Fatalf("%d drafts stored", n)
+	}
+	// A never action stays out of reach.
+	out, isErr := run(allowed, "sales_act", map[string]any{"action": "deal.set_discount", "object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"percent": "5"}, "request_id": "req-auto-0002"})
+	if !isErr || !strings.HasPrefix(toolText(out), "not_allowed_for_agents") {
+		t.Fatalf("never action with sales:apply: %v", out)
+	}
+	// Apply without act isn't enough.
+	stage2 := map[string]any{"action": "deal.set_stage", "object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"to": "在跟"}, "request_id": "req-auto-0004"}
+	if out, isErr := run(grant("sales:read", "sales:apply"), "sales_act", stage2); !isErr || !strings.HasPrefix(toolText(out), "not_allowed_for_agents") {
+		t.Fatalf("apply without act: %v", out)
+	}
+
+	// Done lists both kinds: an undoable record with its undo ID, the stage without one.
+	w.clock.add(time.Minute)
+	rec, isErr := run(plain, "sales_act", map[string]any{"action": "record.add", "object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "met"}, "request_id": "req-auto-0003"})
+	if isErr {
+		t.Fatal(toolText(rec))
+	}
+	undoID := get(toolData(t, rec), "undo", "id")
+	done := w.call("GET", "/v1/done", w.as(w.rep), nil)
+	done.want(t, 200, "")
+	entries := done.body["done"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("done: %s", done.raw)
+	}
+	newest, older := entries[0].(map[string]any), entries[1].(map[string]any)
+	if newest["action"] != "record.add" || newest["undo_id"] != undoID || newest["undo_expires_at"] == nil || newest["agent"] != "agent:sales-assistant" {
+		t.Fatalf("the record's entry: %v", newest)
+	}
+	if older["action"] != "deal.set_stage" || older["undo_id"] != nil {
+		t.Fatalf("the stage's entry: %v", older)
+	}
+	// After the undo the entry stays, without its undo ID; nobody else sees it; an agent can't read it.
+	w.call("POST", "/v1/undo/"+undoID.(string), w.as(w.rep), nil).want(t, 200, "")
+	after := w.call("GET", "/v1/done", w.as(w.rep), nil).body["done"].([]any)
+	if len(after) != 2 || after[0].(map[string]any)["undo_id"] != nil {
+		t.Fatalf("done after the undo: %v", after)
+	}
+	if n := len(w.call("GET", "/v1/done", w.as(w.rival), nil).body["done"].([]any)); n != 0 {
+		t.Fatalf("another rep sees %d entries", n)
+	}
+	w.call("GET", "/v1/done", agentToken(w.rep), nil).want(t, 401, "person_token_required")
+	// Past the window it's gone.
+	w.clock.add(8 * 24 * time.Hour)
+	if n := len(w.call("GET", "/v1/done", w.as(w.rep), nil).body["done"].([]any)); n != 0 {
+		t.Fatalf("%d entries after 8 days", n)
 	}
 }
 

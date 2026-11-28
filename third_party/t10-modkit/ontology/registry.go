@@ -139,8 +139,12 @@ type Input struct {
 	// Agent names the agent for via agent or proposal, and ProposalID the
 	// proposal confirmed.
 	Agent, ProposalID string
-	// IdempotencyKey is the request's key, for an idempotent action.
+	// IdempotencyKey is the request's key. An idempotent action needs one, and
+	// any action given one replays its answer for it.
 	IdempotencyKey string
+	// AutoApply is set when an agent applied a propose action directly, because
+	// the person let it act without asking, for the audit record.
+	AutoApply bool
 }
 
 // Result is what an applied action changed or created.
@@ -357,8 +361,8 @@ func (r *Registry[C]) Check() error {
 		if a.info.Agent != Never && r.opts.Proposals == nil {
 			errs = append(errs, name+": an agent may propose it, so options need Proposals")
 		}
-		if (a.info.Undo || a.info.Idempotent) && r.opts.Undo == nil {
-			errs = append(errs, name+": undo and idempotent actions need options' Undo store")
+		if (a.info.Undo || a.info.Idempotent || a.info.Agent != Never) && r.opts.Undo == nil {
+			errs = append(errs, name+": undo, idempotent and agent actions need options' Undo store, which keeps keys and what agents did")
 		}
 	}
 	if len(errs) == 0 {
