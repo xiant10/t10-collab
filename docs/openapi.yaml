@@ -320,6 +320,13 @@ paths:
       responses:
         "200": {$ref: "#/components/responses/Ontology"}
         default: {$ref: "#/components/responses/Error"}
+  /v1/undo:
+    get:
+      summary: What the caller can still undo, such as a task their assistant made, newest first
+      operationId: listUndos
+      responses:
+        "200": {$ref: "#/components/responses/Ontology"}
+        default: {$ref: "#/components/responses/Error"}
   /v1/undo/{id}:
     parameters:
       - {$ref: "#/components/parameters/id"}

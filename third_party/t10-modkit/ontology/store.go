@@ -49,6 +49,9 @@ type ProposalStore interface {
 type UndoEntry struct {
 	ID, Tenant, User string
 	Action           string
+	// Agent names the agent that applied it through its _act tool, and is
+	// empty when the person applied it, themselves or by confirming a draft.
+	Agent string
 	// Object is the reference the answer shows after an undo.
 	Object    string
 	Payload   json.RawMessage
@@ -75,6 +78,9 @@ type Replay struct {
 // database. ontology/undo has one in memory and one in Postgres.
 type UndoStore interface {
 	SaveUndo(ctx context.Context, u UndoEntry) error
+	// OpenUndos are the person's entries that can still be undone at now: not
+	// undone, and before they expire. Newest first.
+	OpenUndos(ctx context.Context, tenant, user string, now time.Time) ([]UndoEntry, error)
 	// GetUndo is an entry by ID within the tenant, or ErrNotFound.
 	GetUndo(ctx context.Context, tenant, id string) (UndoEntry, error)
 	// SetUndone marks an entry's undo started or not, and answers ErrUndone when

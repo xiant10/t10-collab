@@ -65,6 +65,8 @@ Collab's rule is that an assistant acting for a person reads and drafts, and onl
 
 Accepting, declining, claiming, deleting and list or settings administration aren't actions, so no assistant can draft them: people do them in the app, and agent teammates with their own tools.
 
+What an assistant made through `work_act` is listed for the person at `GET /v1/undo`, with the agent, until it's undone or the day is over: Workbench shows it under **Done for you** with Undo.
+
 A draft is confirmed under the person's rights at the time. One whose task changed since answers `stale_revision`, and Workbench offers to confirm it anyway with the current revision. Drafts and undo entries live in collab's own schema (`collab.ontology_proposals`, `collab.ontology_undo`, `collab.ontology_replays`).
 
 ## Agent tools

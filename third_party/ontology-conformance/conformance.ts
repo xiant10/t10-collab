@@ -262,17 +262,25 @@ export async function runSuite(base: string, config: Config, log: (line: string)
 		const other = await call("POST", path, person, { ...b, revision: (b.revision ?? 0) + 1000 }, { "idempotency-key": key });
 		must(other.status === 409, `another body under the same key answered ${other.status}`);
 	}, config.idempotent ? undefined : "the config names no idempotent action");
-	await check("undo works by ID within its window, once, and only for its person", async () => {
+	await check("undo works by ID within its window, once, and only for its person, and lists it until then", async () => {
 		const a = await apply(config.undo!, person, `conformance-${randomUUID()}`);
 		must(a.status === 200 && typeof a.body?.undo?.id === "string", `apply answered ${a.status} ${a.text}`);
 		must(Date.parse(a.body.undo.expires_at) > Date.now(), "expires_at is past");
 		const id = a.body.undo.id;
+		const listed = async (token: string) => {
+			const l = await call("GET", "/v1/undo", token);
+			must(l.status === 200 && Array.isArray(l.body?.undo), `GET /v1/undo answered ${l.status} ${l.text}`);
+			return (l.body.undo as Json[]).some((u) => u.id === id);
+		};
+		must(await listed(person), "GET /v1/undo doesn't list what the person can undo");
+		must(!(await listed(outsider)), "GET /v1/undo lists another person's undo");
 		must((await call("POST", `/v1/undo/${id}`, outsider, {})).status === 404, "another person could undo it");
 		must((await call("POST", `/v1/undo/${id}`, agent, {})).status === 401, "a delegated token could undo it");
 		const done = await call("POST", `/v1/undo/${id}`, person, {});
 		must(done.status === 200, `undo answered ${done.status} ${done.text}`);
 		const again = await call("POST", `/v1/undo/${id}`, person, {});
 		must(again.status === 409, `a second undo answered ${again.status}`);
+		must(!(await listed(person)), "GET /v1/undo still lists an undone action");
 	}, config.undo ? undefined : "the config names no undoable action");
 	await check("undo after a dependent change answers 409 undo_conflict", async () => {
 		const a = await apply(config.undo!, person, `conformance-${randomUUID()}`);
@@ -454,6 +462,7 @@ const breaks: Record<string, string> = {
 	stale: "apply answers 409 stale_revision",
 	replay: "idempotent actions replay",
 	"undo-owner": "undo works by ID",
+	"undo-list": "undo works by ID",
 	"undo-conflict": "undo after a dependent change",
 	tier: "descriptor meets the schema",
 	undoable: "descriptor meets the schema",

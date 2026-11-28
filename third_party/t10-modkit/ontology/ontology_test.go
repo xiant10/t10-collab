@@ -723,6 +723,17 @@ func TestUndo(t *testing.T) {
 	a := w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "met"}}, "Idempotency-Key", "u-0001")
 	undoID := get(a.body, "undo", "id").(string)
 
+	// It's on the rep's list of what they can undo, with no agent since the rep
+	// applied it, and on nobody else's.
+	list := w.call("GET", "/v1/undo", w.as(w.rep), nil)
+	list.want(t, 200, "")
+	if entries := list.body["undo"].([]any); len(entries) != 1 || get(entries[0].(map[string]any), "id") != undoID || get(entries[0].(map[string]any), "action") != "record.add" || get(entries[0].(map[string]any), "object") != ref || entries[0].(map[string]any)["agent"] != nil {
+		t.Fatalf("rep's undo list: %v", list.body)
+	}
+	if entries := w.call("GET", "/v1/undo", w.as(w.manager), nil).body["undo"].([]any); len(entries) != 0 {
+		t.Fatalf("manager's undo list: %v", entries)
+	}
+
 	// Someone else's undo is 404.
 	w.call("POST", "/v1/undo/"+undoID, w.as(w.manager), nil).want(t, 404, "not_found")
 	u := w.call("POST", "/v1/undo/"+undoID, w.as(w.rep), nil)
@@ -735,6 +746,9 @@ func TestUndo(t *testing.T) {
 		t.Fatalf("ledger: %+v", records)
 	}
 	w.call("POST", "/v1/undo/"+undoID, w.as(w.rep), nil).want(t, 409, "undone")
+	if entries := w.call("GET", "/v1/undo", w.as(w.rep), nil).body["undo"].([]any); len(entries) != 0 {
+		t.Fatalf("an undone entry is still listed: %v", entries)
+	}
 
 	// A later change that depends on it.
 	b := w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "met again"}}, "Idempotency-Key", "u-0002")
@@ -749,6 +763,9 @@ func TestUndo(t *testing.T) {
 	// Past the window.
 	c := w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "late"}}, "Idempotency-Key", "u-0003")
 	w.clock.add(25 * time.Hour)
+	if entries := w.call("GET", "/v1/undo", w.as(w.rep), nil).body["undo"].([]any); len(entries) != 0 {
+		t.Fatalf("expired entries are still listed: %v", entries)
+	}
 	w.call("POST", "/v1/undo/"+get(c.body, "undo", "id").(string), w.as(w.rep), nil).want(t, 409, "undo_expired")
 }
 
@@ -1031,6 +1048,11 @@ func TestToolsAct(t *testing.T) {
 	}
 	if w.m.Records()[0].Via != "agent" {
 		t.Fatalf("via: %s", w.m.Records()[0].Via)
+	}
+	// The person's list of what they can undo names the agent.
+	entries := w.call("GET", "/v1/undo", w.as(w.rep), nil).body["undo"].([]any)
+	if len(entries) != 1 || entries[0].(map[string]any)["id"] != get(toolData(t, a), "undo", "id") || entries[0].(map[string]any)["agent"] == nil || entries[0].(map[string]any)["agent"] == "" {
+		t.Fatalf("undo list after an act: %v", entries)
 	}
 	// The person can undo what the agent did.
 	w.call("POST", "/v1/undo/"+get(toolData(t, a), "undo", "id").(string), w.as(w.rep), nil).want(t, 200, "")

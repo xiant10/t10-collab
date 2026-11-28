@@ -156,7 +156,7 @@ These need a tenant admin, or a member holding `work:admin` from `auth-server`.
 
 ## Ontology
 
-Collab serves the workspace's ontology contract (`contracts/ontology/README.md`) over its tasks, lists, comments and offers, with the routes the contract names: `GET /v1/ontology`, `GET /v1/objects/{type}/{id}`, `POST /v1/objects/{type}/search`, `GET /v1/objects/{type}/{id}/links/{link}`, `POST /v1/objects/resolve`, `POST /v1/actions/{action}/validate` and `/apply`, `POST /v1/undo/{id}`, and `GET /v1/proposals` with `POST /v1/proposals/{id}/confirm` and `/dismiss`. What it declares, who reads what, and each action's tier are in [ontology.md](ontology.md); the core descriptor is pinned in [ontology.json](ontology.json).
+Collab serves the workspace's ontology contract (`contracts/ontology/README.md`) over its tasks, lists, comments and offers, with the routes the contract names: `GET /v1/ontology`, `GET /v1/objects/{type}/{id}`, `POST /v1/objects/{type}/search`, `GET /v1/objects/{type}/{id}/links/{link}`, `POST /v1/objects/resolve`, `POST /v1/actions/{action}/validate` and `/apply`, `GET /v1/undo` and `POST /v1/undo/{id}`, and `GET /v1/proposals` with `POST /v1/proposals/{id}/confirm` and `/dismiss`. What it declares, who reads what, and each action's tier are in [ontology.md](ontology.md); the core descriptor is pinned in [ontology.json](ontology.json).
 
 ## Agent tools (MCP)
 

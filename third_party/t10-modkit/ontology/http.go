@@ -31,6 +31,7 @@ func (r *Registry[C]) Routes() []Route {
 		{"POST /v1/objects/resolve", r.withCaller(false, r.serveResolve)},
 		{"POST /v1/actions/{action}/validate", r.withCaller(false, r.serveValidate)},
 		{"POST /v1/actions/{action}/apply", r.withCaller(false, r.serveApply)},
+		{"GET /v1/undo", r.withCaller(false, r.serveUndos)},
 		{"POST /v1/undo/{id}", r.withCaller(false, r.serveUndo)},
 	}
 	return append(routes, r.ProposalRoutes()...)
@@ -196,6 +197,15 @@ func (r *Registry[C]) serveUndo(w http.ResponseWriter, req *http.Request, c C) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, out)
+}
+
+func (r *Registry[C]) serveUndos(w http.ResponseWriter, req *http.Request, c C) {
+	out, err := r.Undos(req.Context(), c)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]any{"undo": out})
 }
 
 func (r *Registry[C]) serveProposals(w http.ResponseWriter, req *http.Request, c C) {

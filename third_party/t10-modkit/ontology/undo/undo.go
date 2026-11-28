@@ -10,6 +10,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing/fstest"
@@ -66,6 +67,25 @@ func (m *Memory) GetUndo(_ context.Context, tenant, id string) (ontology.UndoEnt
 		return u, ontology.ErrNotFound
 	}
 	return u, nil
+}
+
+func (m *Memory) OpenUndos(_ context.Context, tenant, user string, now time.Time) ([]ontology.UndoEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.init()
+	out := []ontology.UndoEntry{}
+	for _, u := range m.entries {
+		if u.Tenant == tenant && u.User == user && !u.Undone && now.Before(u.ExpiresAt) {
+			out = append(out, u)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return out, nil
 }
 
 func (m *Memory) SetUndone(_ context.Context, tenant, id string, undone bool) error {
@@ -163,8 +183,8 @@ func (s Postgres) SaveUndo(ctx context.Context, u ontology.UndoEntry) error {
 	if payload == "" {
 		payload = "null"
 	}
-	_, err := s.Pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.ontology_undo (tenant_id,id,user_id,action,object,payload,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, s.Schema),
-		u.Tenant, u.ID, u.User, u.Action, u.Object, payload, u.CreatedAt, u.ExpiresAt)
+	_, err := s.Pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %s.ontology_undo (tenant_id,id,user_id,action,agent,object,payload,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, s.Schema),
+		u.Tenant, u.ID, u.User, u.Action, u.Agent, u.Object, payload, u.CreatedAt, u.ExpiresAt)
 	return err
 }
 
@@ -173,13 +193,31 @@ func (s Postgres) GetUndo(ctx context.Context, tenant, id string) (ontology.Undo
 	var payload []byte
 	var undone *time.Time
 	var reverted *time.Time
-	err := s.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT id,tenant_id,user_id,action,object,payload,created_at,expires_at,undone_at,reverted_at FROM %s.ontology_undo WHERE tenant_id=$1 AND id=$2`, s.Schema), tenant, id).
-		Scan(&u.ID, &u.Tenant, &u.User, &u.Action, &u.Object, &payload, &u.CreatedAt, &u.ExpiresAt, &undone, &reverted)
+	err := s.Pool.QueryRow(ctx, fmt.Sprintf(`SELECT id,tenant_id,user_id,action,agent,object,payload,created_at,expires_at,undone_at,reverted_at FROM %s.ontology_undo WHERE tenant_id=$1 AND id=$2`, s.Schema), tenant, id).
+		Scan(&u.ID, &u.Tenant, &u.User, &u.Action, &u.Agent, &u.Object, &payload, &u.CreatedAt, &u.ExpiresAt, &undone, &reverted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ontology.ErrNotFound
 	}
 	u.Payload, u.Undone, u.Reverted = payload, undone != nil, reverted != nil
 	return u, err
+}
+
+func (s Postgres) OpenUndos(ctx context.Context, tenant, user string, now time.Time) ([]ontology.UndoEntry, error) {
+	rows, err := s.Pool.Query(ctx, fmt.Sprintf(`SELECT id,tenant_id,user_id,action,agent,object,payload,created_at,expires_at FROM %s.ontology_undo
+		WHERE tenant_id=$1 AND user_id=$2 AND undone_at IS NULL AND expires_at > $3 ORDER BY created_at DESC, id DESC LIMIT 200`, s.Schema), tenant, user, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ontology.UndoEntry{}
+	for rows.Next() {
+		var u ontology.UndoEntry
+		if err := rows.Scan(&u.ID, &u.Tenant, &u.User, &u.Action, &u.Agent, &u.Object, &u.Payload, &u.CreatedAt, &u.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 func (s Postgres) FinishUndo(ctx context.Context, tenant, id string) error {

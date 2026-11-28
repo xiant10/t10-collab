@@ -62,7 +62,13 @@ func TestFlowsOnPostgres(t *testing.T) {
 	}
 	id := get(a.body, "undo", "id").(string)
 	w.call("POST", "/v1/undo/"+id, w.as(w.manager), nil).want(t, 404, "not_found")
+	if entries := w.call("GET", "/v1/undo", w.as(w.rep), nil).body["undo"].([]any); len(entries) != 1 || entries[0].(map[string]any)["id"] != id {
+		t.Fatalf("undo list on Postgres: %v", entries)
+	}
 	w.call("POST", "/v1/undo/"+id, w.as(w.rep), nil).want(t, 200, "")
+	if entries := w.call("GET", "/v1/undo", w.as(w.rep), nil).body["undo"].([]any); len(entries) != 0 {
+		t.Fatalf("undone entry listed on Postgres: %v", entries)
+	}
 	w.call("POST", "/v1/undo/"+id, w.as(w.rep), nil).want(t, 409, "undone")
 	c := w.call("POST", "/v1/actions/record.add/apply", w.as(w.rep), map[string]any{"object": ref, "revision": w.revision(w.rep, ref), "params": map[string]any{"kind": "拜访", "summary": "late"}}, "Idempotency-Key", "pg-2")
 	clk.add(25 * time.Hour)

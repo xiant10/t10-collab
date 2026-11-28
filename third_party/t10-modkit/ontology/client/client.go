@@ -361,6 +361,20 @@ func (c *Client) Undo(ctx context.Context, token, module, id string) (ontology.A
 	return out, c.do(ctx, token, m, "POST", "/v1/undo/"+url.PathEscape(id), map[string]any{}, nil, &out)
 }
 
+// Undos are the person's applied actions in a module that can still be undone,
+// newest first.
+func (c *Client) Undos(ctx context.Context, token, module string) ([]ontology.UndoAnswer, error) {
+	var out struct {
+		Undo []ontology.UndoAnswer `json:"undo"`
+	}
+	m, err := c.module(module)
+	if err != nil {
+		return nil, err
+	}
+	err = c.do(ctx, token, m, "GET", "/v1/undo", nil, nil, &out)
+	return out.Undo, err
+}
+
 // Proposals are the person's open drafts in a module.
 func (c *Client) Proposals(ctx context.Context, token, module string) ([]ontology.ProposalAnswer, error) {
 	var out struct {

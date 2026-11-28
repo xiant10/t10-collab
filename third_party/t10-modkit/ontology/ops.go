@@ -75,6 +75,17 @@ type ApplyAnswer struct {
 	Undo   *UndoRef      `json:"undo,omitempty"`
 }
 
+// UndoAnswer is an applied action as the person's list of what they can still
+// undo shows it. Agent is set when an agent applied it through its _act tool.
+type UndoAnswer struct {
+	ID        string    `json:"id"`
+	Action    string    `json:"action"`
+	Object    string    `json:"object,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // ProposalAnswer is a draft as the person's list shows it.
 type ProposalAnswer struct {
 	ID        string          `json:"id"`
@@ -513,6 +524,9 @@ func (r *Registry[C]) Apply(ctx context.Context, c C, name string, req ActionReq
 		now := r.opts.Now()
 		entry := UndoEntry{ID: ids.New("undo"), Tenant: who.Tenant, User: who.User, Action: name, Object: r.ref(res.Type, res.ID),
 			Payload: payload, CreatedAt: now, ExpiresAt: now.Add(a.window)}
+		if in.Via == "agent" {
+			entry.Agent = in.Agent
+		}
 		if err := r.opts.Undo.SaveUndo(ctx, entry); err != nil {
 			return ApplyAnswer{}, r.asError(err)
 		}
@@ -664,6 +678,28 @@ func (r *Registry[C]) Propose(ctx context.Context, c C, agent, name string, req 
 }
 
 // Proposals are the caller's own open drafts, newest first.
+// Undos are the caller's applied actions that can still be undone, newest
+// first: what GET /v1/undo answers. An action no longer declared is left out,
+// since its undo can't run.
+func (r *Registry[C]) Undos(ctx context.Context, c C) ([]UndoAnswer, error) {
+	out := []UndoAnswer{}
+	if r.opts.Undo == nil {
+		return out, nil
+	}
+	who := r.opts.Who(c)
+	list, err := r.opts.Undo.OpenUndos(ctx, who.Tenant, who.User, r.opts.Now())
+	if err != nil {
+		return nil, r.asError(err)
+	}
+	for _, u := range list {
+		if a, ok := r.actions[u.Action]; !ok || a.revert == nil {
+			continue
+		}
+		out = append(out, UndoAnswer{ID: u.ID, Action: u.Action, Object: u.Object, Agent: u.Agent, CreatedAt: u.CreatedAt, ExpiresAt: u.ExpiresAt})
+	}
+	return out, nil
+}
+
 func (r *Registry[C]) Proposals(ctx context.Context, c C) ([]ProposalAnswer, error) {
 	out := []ProposalAnswer{}
 	if r.opts.Proposals == nil {

@@ -31,7 +31,7 @@ import (
 
 // The rules -break can break, each caught by one of the suite's checks.
 var breaks = []string{"scope", "paging", "hidden", "unknown-type", "resolve", "delegated", "forbidden", "wrong-state", "stale",
-	"replay", "undo-owner", "undo-conflict", "tier", "undoable", "tenant-action", "label", "events", "interface",
+	"replay", "undo-owner", "undo-list", "undo-conflict", "tier", "undoable", "tenant-action", "label", "events", "interface",
 	"tools-tenant", "agent-never", "agent-mask", "agent-filter", "agent-grant", "agent-data"}
 
 type order struct {
@@ -217,6 +217,9 @@ func breaking(rule string, next http.Handler) http.Handler {
 			edit(func() { v["undo"].(map[string]any)["id"] = fmt.Sprintf("undo_%d", time.Now().UnixNano()) })
 		case rule == "undo-owner" && strings.HasPrefix(path, "/v1/undo/") && status == 404:
 			status, body = 200, []byte(`{"object":null}`)
+		case rule == "undo-list" && path == "/v1/undo" && status == 200:
+			// It forgets what can still be undone.
+			body = []byte(`{"undo":[]}`)
 		case rule == "undo-conflict" && v["error"] == "undo_conflict":
 			status, body = 200, []byte(`{"object":null}`)
 		case path == "/v1/ontology" && status == 200:
